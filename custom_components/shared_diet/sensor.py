@@ -25,7 +25,8 @@ class MealSensor(SensorEntity):
         self._store = store
         self._profile_id = profile_id
         self._index = 0 if current else 1
-        self._attr_name = f"{name} pasto attuale" if current else f"{name} prossimo pasto"
+        self._current = current
+        self._attr_name = self._label(name)
         self._attr_unique_id = f"{profile_id}_{'current' if current else 'next'}"
         self._profile: dict | None = None
         self._meal: dict | None = None
@@ -35,11 +36,15 @@ class MealSensor(SensorEntity):
         self.async_on_remove(async_track_time_change(self.hass, self._refresh, second=0))
         self._refresh()
 
+    def _label(self, name: str) -> str:
+        return f"{name} pasto attuale" if self._current else f"{name} prossimo pasto"
+
     @callback
     def _refresh(self, _now: datetime | None = None) -> None:
         self._profile = self._store.profiles.get(self._profile_id)
         self._meal = None
         if self._profile is not None:
+            self._attr_name = self._label(self._profile["name"])
             self._meal = current_and_next(self._profile, dt_util.now())[self._index]
         self.async_write_ha_state()
 

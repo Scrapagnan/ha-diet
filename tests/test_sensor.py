@@ -156,3 +156,16 @@ async def test_malformed_profile_does_not_skip_others(hass, freezer, monkeypatch
     await hass.async_block_till_done()
     assert [c.data["title"] for c in calls] == ["Luca: Pranzo alle 13:00"]
     assert "Bad" in caplog.text
+
+
+async def test_renaming_profile_updates_friendly_name_not_entity_id(hass, freezer):
+    freezer.move_to(at(10, 0))
+    store, profile_id = await _setup_luca(hass)
+    profile = store.profiles[profile_id]
+    profile["name"] = "Marco"
+    await store.async_save_profile(profile)
+    await hass.async_block_till_done()
+    state = hass.states.get("sensor.luca_pasto_attuale")
+    assert state is not None
+    assert state.attributes["friendly_name"] == "Marco pasto attuale"
+    assert hass.states.get("sensor.marco_pasto_attuale") is None
