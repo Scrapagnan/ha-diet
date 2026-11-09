@@ -61,6 +61,8 @@ input, select { padding: 6px 8px; min-width: 0; max-width: 100%; border: 1px sol
 .item { display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 6px; margin: 4px 0; }
 .item .food { grid-column: 1 / 4; }
 .item [data-f="qty"] { grid-column: 1; } /* always start a new row, with or without the × button */
+.item .recipe-line { grid-column: 1 / 4; }
+details p { white-space: pre-line; margin: 6px 0; }
 .or { font-size: 12px; font-weight: 600; text-align: center; color: var(--secondary-text-color, #727272); }
 .chips { display: flex; gap: 4px; }
 .muted { color: var(--secondary-text-color, #727272); font-size: 14px; }
@@ -88,7 +90,12 @@ const addDays = (s, n) => { const d = parseIso(s); d.setDate(d.getDate() + n); r
 const span = (a, b) => Math.round((parseIso(b) - parseIso(a)) / 864e5) + 1;
 const weekday = (s) => (parseIso(s).getDay() + 6) % 7; // 0 = lunedì, as in model.py
 const fmtDay = (s, opts) => parseIso(s).toLocaleDateString("it-IT", opts);
-const fmtItem = (it) => (!it ? "" : it.qty !== null ? `${it.food} ${it.qty} ${it.unit}` : it.note ? `${it.food} (${it.note})` : it.food);
+// Mirrors model.py format_item: "Nome 80 g", "Nome (nota)", "Nome", "Ricetta: ingredienti".
+const fmtItem = (it) => {
+  if (!it) return "";
+  if ("recipe" in it) return it.ingredients.length ? `${it.food}: ${it.ingredients.map((i) => fmtItem(i)).join(", ")}` : it.food;
+  return it.qty !== null ? `${it.food} ${it.qty} ${it.unit}` : it.note ? `${it.food} (${it.note})` : it.food;
+};
 const blankItem = () => ({ food: "", qty: null, unit: "g", note: "" });
 const newMeal = () => ({ id: uid(), name: "Pasto", time: null, options: [[{ alts: [blankItem()] }]] });
 // Meal editor context: "w<weekday>" in Settimana, "x<ISO date>" in Date (see _list).
@@ -104,20 +111,36 @@ const hasChoice = (m) => m.options.length > 1 || m.options.some((o) => o.some((l
 // Mirrors model.py: effective day, choice priority, option/alternative resolution.
 const effectiveDay = (p, s) => p.exceptions[s] ?? p.week[String(weekday(s))];
 const choiceFor = (p, s, mid) => p.choices.dates[s]?.[mid] ?? p.choices.defaults[mid] ?? zeroChoice();
-function resolveMeal(meal, choice) {
+const recipeOf = (rid, recipes) => (Object.hasOwn(recipes, rid) ? recipes[rid] : null);
+// Mirrors model.py expand_item: a recipe item becomes its name and ingredients with the person's grams (override, else default).
+function expandItem(item, profile, recipes) {
+  if (!("recipe" in item)) return item;
+  const recipe = recipeOf(item.recipe, recipes);
+  if (!recipe) return { recipe: item.recipe, food: "Ricetta mancante", note: "", ingredients: [], missing: true };
+  const overrides = profile.recipe_qty?.[item.recipe] ?? {};
+  const ingredients = recipe.ingredients.map((i) => ({
+    food: i.food, qty: Object.hasOwn(overrides, i.id) ? overrides[i.id] : i.qty, unit: i.unit, note: "",
+  }));
+  return { recipe: item.recipe, food: recipe.name, note: recipe.note, ingredients, missing: false };
+}
+// Display name of a meal item: the recipe's name, or the food name ("Ricetta mancante" if the recipe was deleted).
+const itemLabel = (item, recipes) => ("recipe" in item ? recipeOf(item.recipe, recipes)?.name ?? "Ricetta mancante" : item.food);
+function resolveMeal(meal, choice, profile, recipes) {
   const opt = choice.option >= 0 && choice.option < meal.options.length ? choice.option : 0;
   const items = meal.options[opt].map((line, i) => {
     const alt = choice.lines[String(i)] ?? 0;
-    return line.alts[alt >= 0 && alt < line.alts.length ? alt : 0];
+    return expandItem(line.alts[alt >= 0 && alt < line.alts.length ? alt : 0], profile ?? {}, recipes ?? {});
   }).filter(Boolean); // a line emptied in the editor has no alternative to show
   return { option: opt, items };
 }
 
-// Cleans the draft before saving: trims, drops empty food rows, rejects empty meals.
+// Cleans the draft before saving: trims, drops empty food rows, rejects empty meals. Recipe references pass through as {recipe} only.
 const cleanItem = (a) => {
   if (a.qty < 0) throw new Error("La quantità non può essere negativa");
   return { food: a.food.trim(), qty: Number.isFinite(a.qty) ? a.qty : null, unit: a.unit.trim(), note: a.note.trim() };
 };
+const cleanAlt = (a) => ("recipe" in a ? { recipe: a.recipe } : cleanItem(a));
+const hasAltContent = (a) => "recipe" in a || a.food.trim();
 // `shape` is the option/line/alt counts: if cleaning changes it, indexes moved and the meal's choices are stale.
 const shape = (options) => JSON.stringify(options.map((o) => o.map((l) => l.alts.length)));
 function cleanMeals(meals, changed) {
@@ -125,7 +148,7 @@ function cleanMeals(meals, changed) {
     const name = m.name.trim();
     if (!name) throw new Error("Ogni pasto deve avere un nome");
     const options = m.options
-      .map((opt) => opt.map((line) => ({ alts: line.alts.filter((a) => a.food.trim()).map(cleanItem) })).filter((l) => l.alts.length))
+      .map((opt) => opt.map((line) => ({ alts: line.alts.filter(hasAltContent).map(cleanAlt) })).filter((l) => l.alts.length))
       .filter((opt) => opt.length);
     if (!options.length) throw new Error(`«${name}»: inserisci almeno un alimento`);
     if (shape(options) !== shape(m.options)) changed.add(m.id);
@@ -155,7 +178,7 @@ function cleanProfile(p) {
       minutes: Math.min(240, Math.max(0, Math.round(Number(p.reminder.minutes) || 0))),
       notify: p.reminder.notify || null,
     },
-    week, exceptions, choices, rev: p.rev,
+    week, exceptions, choices, recipe_qty: clone(p.recipe_qty ?? {}), rev: p.rev,
   };
 }
 
@@ -191,6 +214,8 @@ function mergeProfiles(base, mine, theirs) {
     mergeMap(`choices.dates.${date}.`, base.choices.dates[date] ?? {}, mine.choices.dates[date] ?? {}, theirs.choices.dates[date] ?? {}, target);
     if (!Object.keys(target).length) delete merged.choices.dates[date];
   }
+  merged.recipe_qty ??= {};
+  mergeMap("recipe_qty.", base.recipe_qty ?? {}, mine.recipe_qty ?? {}, theirs.recipe_qty ?? {}, merged.recipe_qty);
   return { merged, overlaps };
 }
 
@@ -201,6 +226,7 @@ class SharedDietPanel extends HTMLElement {
     const today = iso(new Date());
     this._view = "today";
     this._profiles = null; // last subscribe payload
+    this._recipes = {}; // recipe book from the same payload, by id
     this._loadError = "";
     this._profileId = null;
     this._draft = null; // editable copy of the selected profile
@@ -232,6 +258,7 @@ class SharedDietPanel extends HTMLElement {
     for (const p of profiles)
       for (const m of [...Object.values(p.week).flat(), ...Object.values(p.exceptions).flat()])
         for (const a of m.options.flat().flatMap((l) => l.alts)) {
+          if ("recipe" in a) continue; // recipe names are not food names
           const name = a.food.trim().replace(/\s+/g, " ");
           if (name && !names.has(foldText(name))) names.set(foldText(name), name);
         }
@@ -291,7 +318,7 @@ class SharedDietPanel extends HTMLElement {
 
   _subscribe() {
     this._unsub = this._hass.connection
-      .subscribeMessage((msg) => this._onData(msg.profiles), { type: "shared_diet/subscribe" })
+      .subscribeMessage((msg) => this._onData(msg.profiles, msg.recipes), { type: "shared_diet/subscribe" })
       .catch((err) => {
         this._loadError = err?.message || "Impossibile caricare i dati";
         this._render();
@@ -300,8 +327,9 @@ class SharedDietPanel extends HTMLElement {
   }
 
   // Latest server data. Unsaved edits to the selected profile survive; a deleted profile resets the selection.
-  _onData(profiles) {
+  _onData(profiles, recipes) {
     this._profiles = profiles;
+    this._recipes = recipes ?? {};
     if (!profiles[this._profileId]) {
       this._profileId = Object.keys(profiles)[0] ?? null;
       this._draft = null;
@@ -696,7 +724,7 @@ class SharedDietPanel extends HTMLElement {
 
   _datalists() {
     const meals = Object.values(this._profiles).flatMap((p) => [...Object.values(p.week).flat(), ...Object.values(p.exceptions).flat()]);
-    const items = meals.flatMap((m) => m.options.flat().flatMap((l) => l.alts));
+    const items = meals.flatMap((m) => m.options.flat().flatMap((l) => l.alts)).filter((i) => !("recipe" in i));
     // Units: case-insensitive like model.py. Food suggestions use the in-panel list (_suggest): datalists are unreliable in the Companion app.
     const units = [...new Set(["g", "ml", "pz", ...items.map((i) => i.unit.trim().toLowerCase()).filter(Boolean)])];
     return `<datalist id="units">${units.map((u) => `<option value="${esc(u)}">`).join("")}</datalist>`;
@@ -706,13 +734,19 @@ class SharedDietPanel extends HTMLElement {
   _resolved(p, s, withAlts = false) {
     const meals = effectiveDay(p, s);
     if (!meals.length) return `<p class="muted">Nessun pasto.</p>`;
+    // Recipe: name, ingredients with the person's grams, preparation note folded away.
+    const itemHtml = (i) => ("recipe" in i
+      ? `<li><strong>${esc(i.food)}</strong>${i.ingredients.length
+        ? `<ul class="muted">${i.ingredients.map((g) => `<li>${esc(fmtItem(g))}</li>`).join("")}</ul>` : ""}${
+        i.note.trim() ? `<details><summary>Preparazione</summary><p>${esc(i.note)}</p></details>` : ""}</li>`
+      : `<li>${esc(fmtItem(i))}</li>`);
     return meals.map((m) => {
-      const r = resolveMeal(m, choiceFor(p, s, m.id));
+      const r = resolveMeal(m, choiceFor(p, s, m.id), p, this._recipes);
       const alts = m.options.map((opt, oi) => `<li class="${oi === r.option ? "" : "muted"}">${m.options.length > 1 ? `Opzione ${oi + 1}: ` : ""}${
-        opt.map((l) => l.alts.map((a) => esc(fmtItem(a))).join(" / ")).join(" + ")}</li>`).join("");
+        opt.map((l) => l.alts.map((a) => esc("recipe" in a ? itemLabel(a, this._recipes) : fmtItem(a))).join(" / ")).join(" + ")}</li>`).join("");
       return `<section class="card">
         <div class="meal-head"><strong>${esc(m.name)}</strong><span class="muted">${esc(m.time ?? "senza orario")}</span></div>
-        <ul>${r.items.map((i) => `<li>${esc(fmtItem(i))}</li>`).join("")}</ul>
+        <ul>${r.items.map(itemHtml).join("")}</ul>
         ${withAlts ? `<ul class="alts">${alts}</ul>` : ""}
       </section>`;
     }).join("");
@@ -789,16 +823,16 @@ class SharedDietPanel extends HTMLElement {
   }
 
   _choiceEditor(date, m, choice) {
-    const { option } = resolveMeal(m, choice);
+    const { option } = resolveMeal(m, choice, this._draft, this._recipes);
     const attrs = `data-date="${esc(date)}" data-mid="${esc(m.id)}"`;
     const opts = m.options.map((o, oi) => `<option value="${oi}"${oi === option ? " selected" : ""}>Opzione ${oi + 1}: ${
-      esc(o.map((l) => l.alts.map((a) => a.food).join(" / ")).join(" + "))}</option>`).join("");
+      esc(o.map((l) => l.alts.map((a) => itemLabel(a, this._recipes)).join(" / ")).join(" + "))}</option>`).join("");
     const lines = m.options[option].map((line, li) => {
       if (line.alts.length < 2) return "";
       const want = choice.lines[String(li)] ?? 0;
       const sel = want >= 0 && want < line.alts.length ? want : 0;
       return `<label class="sub-row">Alimento ${li + 1}
-        <select data-ch="cline" ${attrs} data-l="${li}">${line.alts.map((a, ai) => `<option value="${ai}"${ai === sel ? " selected" : ""}>${esc(a.food)}</option>`).join("")}</select>
+        <select data-ch="cline" ${attrs} data-l="${li}">${line.alts.map((a, ai) => `<option value="${ai}"${ai === sel ? " selected" : ""}>${esc(itemLabel(a, this._recipes))}</option>`).join("")}</select>
       </label>`;
     }).join("");
     // Whole-meal options are no longer offered in the editor; the selector only shows for meals that still have several.
@@ -872,7 +906,7 @@ class SharedDietPanel extends HTMLElement {
           aria-label="${folded ? "Espandi pasto" : "Comprimi pasto"}">${folded ? "▸" : "▾"}</button>
       </div>`;
     if (folded) {
-      const foods = m.options.flat().map((l) => l.alts.map((a) => a.food.trim()).filter(Boolean).join(" / ")).filter(Boolean);
+      const foods = m.options.flat().map((l) => l.alts.map((a) => itemLabel(a, this._recipes).trim()).filter(Boolean).join(" / ")).filter(Boolean);
       return `<section class="card">${head}
         <p class="muted summary">${foods.length ? esc(foods.join(" · ")) : "Nessun alimento"}</p></section>`;
     }
@@ -890,18 +924,26 @@ class SharedDietPanel extends HTMLElement {
     const at = `data-ctx="${esc(ctx)}" data-i="${i}" data-o="${oi}"`;
     const lines = opt.map((line, li) => `<div class="line">
         <div class="line-head">Alimento ${li + 1}</div>
-        ${line.alts.map((a, ai) => `${ai ? `<div class="or">OPPURE</div>` : ""}
-          <div class="item">
+        ${line.alts.map((a, ai) => {
+          const sep = ai ? `<div class="or">OPPURE</div>` : "";
+          const del = line.alts.length > 1 ? `<button class="icon" data-act="delalt" ${at} data-l="${li}" data-a="${ai}" aria-label="Rimuovi alimento">×</button>` : "";
+          // Recipe items are not edited here yet (Task 7 adds the recipe row); shown read-only.
+          if ("recipe" in a) {
+            const r = recipeOf(a.recipe, this._recipes);
+            return `${sep}<div class="item"><span class="recipe-line">${esc(r ? `Ricetta: ${r.name}` : "Ricetta mancante")}</span>${del}</div>`;
+          }
+          return `${sep}<div class="item">
             <input class="food" autocomplete="off" value="${esc(a.food)}" placeholder="Alimento" aria-label="Alimento"
               data-ch="item" data-f="food" ${at} data-l="${li}" data-a="${ai}">
-            ${line.alts.length > 1 ? `<button class="icon" data-act="delalt" ${at} data-l="${li}" data-a="${ai}" aria-label="Rimuovi alimento">×</button>` : ""}
+            ${del}
             <input type="number" min="0" step="any" value="${esc(a.qty ?? "")}" placeholder="Quantità" aria-label="Quantità"
               data-ch="item" data-f="qty" ${at} data-l="${li}" data-a="${ai}">
             <input list="units" value="${esc(a.unit)}" placeholder="Unità" aria-label="Unità"
               data-ch="item" data-f="unit" ${at} data-l="${li}" data-a="${ai}">
             <input value="${esc(a.note)}" placeholder="Nota" aria-label="Nota"
               data-ch="item" data-f="note" ${at} data-l="${li}" data-a="${ai}">
-          </div>`).join("")}
+          </div>`;
+        }).join("")}
         <div class="row">
           <button data-act="addalt" ${at} data-l="${li}">+ OPPURE</button>
           <button class="danger" data-act="delline" ${at} data-l="${li}">Rimuovi alimento</button>

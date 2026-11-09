@@ -20,7 +20,7 @@ const meal = (id) => ({ id, name: id, time: "13:00", options: [[{ alts: [{ food:
 const base = () => ({
   id: "p1", name: "Luca", person: null, reminder: { enabled: false, minutes: 15, notify: null },
   week: { 0: [meal("pranzo")], 1: [], 2: [], 3: [], 4: [], 5: [], 6: [] },
-  exceptions: {}, choices: { defaults: {}, dates: {} }, rev: 3,
+  exceptions: {}, choices: { defaults: {}, dates: {} }, recipe_qty: {}, rev: 3,
 });
 
 // Disjoint edits: mine changes week["0"], theirs changes choices.defaults -> both kept.
@@ -64,6 +64,27 @@ const base = () => ({
   const { merged, overlaps } = merge(b, mine, theirs);
   assert.deepStrictEqual(merged.reminder, { enabled: false, minutes: 30, notify: null });
   assert.deepStrictEqual(overlaps, []);
+}
+
+// Disjoint edits: mine changes recipe_qty.r1, theirs changes week.0 -> both kept.
+{
+  const b = base();
+  const mine = base(); mine.recipe_qty.r1 = { i1: 80 };
+  const theirs = base(); theirs.week[0] = [meal("cena")]; theirs.rev = 4;
+  const { merged, overlaps } = merge(b, mine, theirs);
+  assert.deepStrictEqual(merged.recipe_qty, { r1: { i1: 80 } });
+  assert.deepStrictEqual(merged.week[0], theirs.week[0]);
+  assert.deepStrictEqual(overlaps, []);
+}
+
+// Same recipe_qty key changed differently on both sides -> theirs kept and listed.
+{
+  const b = base();
+  const mine = base(); mine.recipe_qty.r1 = { i1: 80 };
+  const theirs = base(); theirs.recipe_qty.r1 = { i1: 20 }; theirs.rev = 4;
+  const { merged, overlaps } = merge(b, mine, theirs);
+  assert.deepStrictEqual(merged.recipe_qty, { r1: { i1: 20 } });
+  assert.deepStrictEqual(overlaps, ["recipe_qty.r1"]);
 }
 
 console.log("merge.test.mjs: all assertions passed");
