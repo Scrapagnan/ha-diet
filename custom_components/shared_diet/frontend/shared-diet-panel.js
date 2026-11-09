@@ -10,7 +10,7 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const MAX_SPAN = 62;
 
 const CSS = `
-:host { display: block; min-height: 100%; box-sizing: border-box;
+:host { display: block; height: 100%; overflow-y: auto; box-sizing: border-box;
   background: var(--primary-background-color, #fafafa); color: var(--primary-text-color, #212121);
   font-family: var(--paper-font-body1_-_font-family, Roboto, sans-serif); }
 * { box-sizing: border-box; }
@@ -95,9 +95,10 @@ function resolveMeal(meal, choice) {
 }
 
 // Cleans the draft before saving: trims, drops empty food rows, rejects empty meals.
-const cleanItem = (a) => ({
-  food: a.food.trim(), qty: Number.isFinite(a.qty) ? a.qty : null, unit: a.unit.trim(), note: a.note.trim(),
-});
+const cleanItem = (a) => {
+  if (a.qty < 0) throw new Error("La quantità non può essere negativa");
+  return { food: a.food.trim(), qty: Number.isFinite(a.qty) ? a.qty : null, unit: a.unit.trim(), note: a.note.trim() };
+};
 // `shape` is the option/line/alt counts: if cleaning changes it, indexes moved and the meal's choices are stale.
 const shape = (options) => JSON.stringify(options.map((o) => o.map((l) => l.alts.length)));
 function cleanMeals(meals, changed) {
@@ -130,7 +131,11 @@ function cleanProfile(p) {
   }
   return {
     id: p.id, name, person: p.person || null,
-    reminder: { enabled: Boolean(p.reminder.enabled), minutes: p.reminder.minutes, notify: p.reminder.notify || null },
+    reminder: {
+      enabled: Boolean(p.reminder.enabled),
+      minutes: Math.min(240, Math.max(0, Math.round(Number(p.reminder.minutes) || 0))),
+      notify: p.reminder.notify || null,
+    },
     week, exceptions, choices, rev: p.rev,
   };
 }
@@ -379,6 +384,7 @@ class SharedDietPanel extends HTMLElement {
     if (!todo) return this._flash("Nessuna lista To-do disponibile");
     const ids = Object.keys(this._profiles);
     const selected = ids.filter((id) => !this._shop.off.has(id));
+    if (!selected.length) return this._flash("Seleziona almeno un profilo");
     return this._run(async () => {
       const res = await this._hass.callWS({
         type: "shared_diet/shopping",
@@ -731,16 +737,18 @@ class SharedDietPanel extends HTMLElement {
     const p = this._draft;
     if (!p) return head;
     const persons = Object.keys(this._hass.states).filter((e) => e.startsWith("person.")).sort();
-    const notifies = Object.keys(this._hass.services.notify ?? {}).map((n) => `notify.${n}`).sort();
-    const select = (field, current, list, empty) => {
+    const notifies = Object.entries(this._hass.services.notify ?? {})
+      .filter(([n, svc]) => n !== "send_message" && !svc.fields?.entity_id)
+      .map(([n]) => `notify.${n}`).sort();
+    const select = (field, current, list, empty, label = (v) => v) => {
       const all = current && !list.includes(current) ? [current, ...list] : list;
       return `<select data-ch="pfield" data-f="${field}"><option value="">${empty}</option>${all.map((v) =>
-        `<option value="${esc(v)}"${v === current ? " selected" : ""}>${esc(v)}</option>`).join("")}</select>`;
+        `<option value="${esc(v)}"${v === current ? " selected" : ""}>${esc(label(v))}</option>`).join("")}</select>`;
     };
     return `${head}${this._picker()}${this._saveBar()}
       <section class="card">
         <label class="sub-row">Nome <input value="${esc(p.name)}" data-ch="pfield" data-f="name"></label>
-        <label class="sub-row">Persona collegata ${select("person", p.person, persons, "Nessuna")}</label>
+        <label class="sub-row">Persona collegata ${select("person", p.person, persons, "Nessuna", (v) => this._hass.states[v]?.attributes.friendly_name ?? v)}</label>
       </section>
       <section class="card">
         <label class="check"><input type="checkbox" data-ch="pfield" data-f="rem.on"${p.reminder.enabled ? " checked" : ""}> Promemoria</label>
