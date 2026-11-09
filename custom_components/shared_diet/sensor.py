@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN, SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
@@ -12,6 +12,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_time_change
 from homeassistant.util import dt as dt_util
 
+from .const import DOMAIN
 from .model import current_and_next, format_item
 from .store import DietStore
 
@@ -62,14 +63,30 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     store: DietStore = entry.runtime_data
-    profiles = store.profiles
-    # Entities of deleted profiles would otherwise stay in the registry as orphans.
     registry = er.async_get(hass)
+    # Entities of deleted profiles would otherwise stay in the registry as orphans.
     for reg_entry in er.async_entries_for_config_entry(registry, entry.entry_id):
-        if reg_entry.unique_id.rsplit("_", 1)[0] not in profiles:
+        if reg_entry.unique_id.rsplit("_", 1)[0] not in store.profiles:
             registry.async_remove(reg_entry.entity_id)
-    async_add_entities(
-        entity
-        for pid, profile in profiles.items()
-        for entity in (MealSensor(store, pid, profile["name"], True), MealSensor(store, pid, profile["name"], False))
-    )
+
+    sensors: dict[str, tuple[MealSensor, MealSensor]] = {}
+
+    @callback
+    def _sync_profiles() -> None:
+        profiles = store.profiles
+        for pid in set(sensors) - set(profiles):
+            for sensor in sensors.pop(pid):
+                entity_id = registry.async_get_entity_id(SENSOR_DOMAIN, DOMAIN, sensor.unique_id)
+                if entity_id is not None:
+                    registry.async_remove(entity_id)
+                hass.async_create_task(sensor.async_remove(force_remove=True))
+        added = []
+        for pid in set(profiles) - set(sensors):
+            name = profiles[pid]["name"]
+            sensors[pid] = (MealSensor(store, pid, name, True), MealSensor(store, pid, name, False))
+            added.extend(sensors[pid])
+        if added:
+            async_add_entities(added)
+
+    _sync_profiles()
+    entry.async_on_unload(store.async_add_listener(_sync_profiles))

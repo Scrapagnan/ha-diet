@@ -41,9 +41,13 @@ Quando cambia il prossimo pasto di Luca (cioè dopo ogni pasto), invia sul telef
 automation:
   - alias: "Dieta: prossimo pasto di Luca"
     trigger:
-      - platform: state
+      - trigger: state
         entity_id: sensor.luca_prossimo_pasto
+        not_from: [unavailable, unknown]
+        not_to: [unavailable, unknown]
     condition:
+      - condition: template
+        value_template: "{{ trigger.from_state.state != trigger.to_state.state }}"
       - condition: template
         value_template: "{{ trigger.to_state.attributes.time is string }}"
     action:

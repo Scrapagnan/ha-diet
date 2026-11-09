@@ -2,8 +2,10 @@
 
 import copy
 from datetime import datetime
+from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
@@ -95,16 +97,28 @@ async def test_missing_notify_service_does_not_break(hass, freezer, caplog):
     assert hass.states.get("sensor.luca_pasto_attuale").state == "Pranzo"
 
 
-async def test_adding_profile_creates_entities(hass, freezer):
+async def test_adding_and_deleting_profiles_does_not_reload_entry(hass, freezer):
     freezer.move_to(at(10, 0))
     entry = MockConfigEntry(domain=DOMAIN)
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    await hass.data[DOMAIN].async_create_profile("Anna")
-    await hass.async_block_till_done()
-    assert hass.states.get("sensor.anna_pasto_attuale") is not None
-    assert hass.states.get("sensor.anna_prossimo_pasto") is not None
+    store = hass.data[DOMAIN]
+    with (
+        patch.object(hass.config_entries, "async_schedule_reload") as schedule_reload,
+        patch.object(hass.config_entries, "async_reload", AsyncMock()) as reload,
+    ):
+        created = await store.async_create_profile("Anna")
+        await hass.async_block_till_done()
+        assert hass.states.get("sensor.anna_pasto_attuale") is not None
+        assert hass.states.get("sensor.anna_prossimo_pasto") is not None
+        await store.async_delete_profile(created["id"])
+        await hass.async_block_till_done()
+        assert hass.states.get("sensor.anna_pasto_attuale") is None
+    schedule_reload.assert_not_called()
+    reload.assert_not_called()
+    assert entry.state is ConfigEntryState.LOADED
+    assert "shared-diet" in hass.data["frontend_panels"]
 
 
 async def test_deleting_profile_removes_its_entities(hass, freezer):
@@ -116,6 +130,7 @@ async def test_deleting_profile_removes_its_entities(hass, freezer):
     await hass.async_block_till_done()
     assert registry.async_get("sensor.luca_pasto_attuale") is None
     assert registry.async_get("sensor.luca_prossimo_pasto") is None
+    assert hass.states.get("sensor.luca_pasto_attuale") is None
 
 
 async def test_malformed_profile_does_not_skip_others(hass, freezer, monkeypatch, caplog):

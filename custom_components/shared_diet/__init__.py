@@ -93,14 +93,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         require_admin=False,
     )
 
-    known = set(store.profiles)
-
-    def _profiles_changed() -> None:
-        if set(store.profiles) != known:
-            hass.config_entries.async_schedule_reload(entry.entry_id)
-
-    entry.async_on_unload(store.async_add_listener(_profiles_changed))
-
     async def _tick(_now: datetime) -> None:
         await _send_reminders(hass, store)
 
