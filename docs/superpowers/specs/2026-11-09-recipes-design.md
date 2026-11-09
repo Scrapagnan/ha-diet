@@ -110,6 +110,12 @@ Richiesta dell'utente dopo la prova: un ingrediente di ricetta può avere altern
 - Scheda Scelte: per i pasti che contengono ricette (come riga o alternativa) con ingredienti a più alternative, una tendina "<Ricetta> · Ingrediente N" con predefinita e ritocco per data, come per le righe.
 - Validazione websocket: ingredienti con `alts` non vuoto, id unici; Choice `recipes` con chiavi/valori stringhe non vuote. `save_profile` pota da `recipe_qty` le alternative inesistenti (come oggi per ingredienti).
 
+### Decisioni dopo la revisione [scelte del builder]
+- **Choice resta un oggetto unico**, come oggi: per una data con ritocco vale l'intera Choice di quella data (incluso `recipes`), altrimenti l'intera predefinita. Il pannello già crea il ritocco copiando la predefinita ("Ritocca per questa data"), quindi la copia include anche `recipes`. Cambiare un ingrediente in una data senza ritocco crea il ritocco come copia della predefinita e poi lo modifica (stesso flusso di oggi).
+- **Scheda Scelte:** le tendine degli ingredienti compaiono solo per le ricette che stanno nel percorso scelto (opzione scelta, alternativa scelta di ogni riga). Cambiando l'alternativa di una riga, la vista si ridisegna e mostra/nasconde le tendine di conseguenza; le scelte di ricette non più nel percorso restano salvate ma non contano.
+- **Nessuna pulizia delle Choice alla modifica di una ricetta:** un `alt_id` o un ingrediente non più esistente si risolve alla prima alternativa (fallback pigro). `save_recipe` non tocca i profili.
+- **Merge a tre vie:** invariato; `recipes` fa parte della Choice e segue le chiavi esistenti (`choices.defaults[meal_id]`, `choices.dates[date][meal_id]`).
+
 ## Lasciato al builder
 
 Struttura dei comandi websocket per le ricette, layout della scheda Ricette e della riga-ricetta (mobile-first, coerente con lo stile attuale), dettagli di migrazione, strategia di merge per le ricette.
