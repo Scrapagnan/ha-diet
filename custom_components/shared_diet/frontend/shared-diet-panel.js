@@ -68,6 +68,7 @@ input, select { padding: 6px 8px; min-width: 0; max-width: 100%; border: 1px sol
 .msg.ok { background: rgba(67, 160, 71, 0.15); }
 .msg.info { background: rgba(3, 169, 244, 0.15); }
 .msg.err { background: rgba(219, 68, 55, 0.15); color: var(--error-color, #db4437); }
+[hidden] { display: none !important; }
 .savebar { position: sticky; top: 0; z-index: 1; display: flex; justify-content: space-between; align-items: center;
   gap: 8px; padding: 8px 0; background: var(--primary-background-color, #fafafa);
   border-bottom: 1px solid var(--divider-color, #e0e0e0); }
@@ -349,8 +350,7 @@ class SharedDietPanel extends HTMLElement {
 
   _markDirty() {
     this._dirty = true;
-    const el = this.shadowRoot.getElementById("state");
-    if (el) el.textContent = "Modifiche non salvate";
+    this.shadowRoot.getElementById("save")?.removeAttribute("hidden"); // no re-render while typing
   }
 
   // Errors: red toast, 8 s or until tapped. HA's own toast (used for success) has no error style.
@@ -677,18 +677,16 @@ class SharedDietPanel extends HTMLElement {
     return `<div id="notice">${this._noticeHtml()}</div>` + views[this._view]() + this._datalists();
   }
 
-  _picker() {
+  // Profile selector; in editor views also the Save button on the same (sticky) row, shown only with unsaved edits.
+  _picker(withSave = false) {
     const ids = Object.keys(this._profiles);
     if (!ids.length) return `<p class="muted">Nessun profilo ancora: creane uno nella scheda «Profili».</p>`;
-    return `<label class="row">Profilo
+    const sel = `<label class="row">Profilo
       <select data-ch="pick">${ids.map((id) => `<option value="${esc(id)}"${id === this._profileId ? " selected" : ""}>${esc(this._profiles[id].name)}</option>`).join("")}</select>
     </label>`;
-  }
-
-  _saveBar() {
-    return `<div class="savebar">
-      <span id="state" class="muted">${this._dirty ? "Modifiche non salvate" : "Tutte le modifiche salvate"}</span>
-      <button class="primary" data-act="save"${this._busy ? " disabled" : ""}>Salva</button>
+    if (!withSave) return sel;
+    return `<div class="savebar">${sel}
+      <button class="primary" id="save" data-act="save"${this._dirty ? "" : " hidden"}${this._busy ? " disabled" : ""}>Salva</button>
     </div>`;
   }
 
@@ -729,7 +727,7 @@ class SharedDietPanel extends HTMLElement {
   _vWeek() {
     if (!this._draft) return this._picker();
     const chips = DAYS_SHORT.map((d, i) => `<button class="chip${i === this._wday ? " on" : ""}" data-act="wday" data-d="${i}">${d}</button>`).join("");
-    return `${this._picker()}${this._saveBar()}
+    return `${this._picker(true)}
       <div class="chips" role="group">${chips}</div>
       <h2>${DAYS[this._wday]}</h2>
       ${this._mealEditor(`w${this._wday}`, this._draft.week[String(this._wday)])}`;
@@ -746,7 +744,7 @@ class SharedDietPanel extends HTMLElement {
       : `<p class="muted">Nessuna eccezione: vale lo schema di ${DAYS[weekday(s)]}.</p>
          ${this._resolved(p, s)}
          <button class="primary" data-act="mkex" data-date="${esc(s)}">Crea eccezione</button>`;
-    return `${this._picker()}${this._saveBar()}
+    return `${this._picker(true)}
       <label class="row">Data <input type="date" value="${esc(s)}" data-ch="date"></label>
       <h2>${esc(fmtDay(s, { weekday: "long", day: "numeric", month: "long" }))}</h2>
       ${body}`;
@@ -764,7 +762,7 @@ class SharedDietPanel extends HTMLElement {
       }
       if (!cards) cards = `<p class="muted">Nessun pasto con alternative nell'intervallo.</p>`;
     }
-    return `${this._picker()}${this._saveBar()}
+    return `${this._picker(true)}
       <div class="row">Dal <input type="date" value="${esc(from)}" data-ch="range" data-f="from"> al
         <input type="date" value="${esc(to)}" data-ch="range" data-f="to"></div>
       ${cards}`;
@@ -840,7 +838,7 @@ class SharedDietPanel extends HTMLElement {
       return `<select data-ch="pfield" data-f="${field}"><option value="">${empty}</option>${all.map((v) =>
         `<option value="${esc(v)}"${v === current ? " selected" : ""}>${esc(label(v))}</option>`).join("")}</select>`;
     };
-    return `${head}${this._picker()}${this._saveBar()}
+    return `${head}${this._picker(true)}
       <section class="card">
         <label class="sub-row">Nome <input value="${esc(p.name)}" data-ch="pfield" data-f="name"></label>
         <label class="sub-row">Persona collegata ${select("person", p.person, persons, "Nessuna", (v) => this._hass.states[v]?.attributes.friendly_name ?? v)}</label>
