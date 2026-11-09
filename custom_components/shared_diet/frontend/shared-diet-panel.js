@@ -52,6 +52,12 @@ input, select { padding: 6px 8px; min-width: 0; max-width: 100%; border: 1px sol
 .line-head { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
   color: var(--primary-color, #03a9f4); margin-bottom: 2px; }
 .summary { margin: 4px 0 0; }
+.sugg { grid-column: 1 / -1; display: flex; flex-direction: column; margin-top: -2px;
+  border: 1px solid var(--divider-color, #e0e0e0); border-radius: 6px; overflow: hidden;
+  background: var(--card-background-color, #fff); }
+.sugg button { border: 0; border-radius: 0; text-align: left; padding: 10px 12px; background: none;
+  border-bottom: 1px solid var(--divider-color, #e0e0e0); }
+.sugg button:last-child { border-bottom: 0; }
 .item { display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 6px; margin: 4px 0; }
 .item .food { grid-column: 1 / 4; }
 .or { font-size: 12px; font-weight: 600; text-align: center; color: var(--secondary-text-color, #727272); }
@@ -83,6 +89,8 @@ const fmtDay = (s, opts) => parseIso(s).toLocaleDateString("it-IT", opts);
 const fmtItem = (it) => (!it ? "" : it.qty !== null ? `${it.food} ${it.qty} ${it.unit}` : it.note ? `${it.food} (${it.note})` : it.food);
 const blankItem = () => ({ food: "", qty: null, unit: "g", note: "" });
 const newMeal = () => ({ id: uid(), name: "Pasto", time: null, options: [[{ alts: [blankItem()] }]] });
+// Comparison key for food names: case, accents and repeated spaces ignored ("Caffè " ~ "caffe").
+const foldText = (s) => s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().trim().replace(/\s+/g, " ");
 // Selector of a food input in the meal editor (to focus a just-added field). ctx is a weekday digit or an ISO date.
 const foodSel = (ctx, i, o, l, a) =>
   `input.food[data-ctx="${ctx}"][data-i="${i}"][data-o="${o}"][data-l="${l}"][data-a="${a}"]`;
@@ -207,6 +215,52 @@ class SharedDietPanel extends HTMLElement {
     this.shadowRoot.addEventListener("click", (e) => this._onClick(e));
     this.shadowRoot.addEventListener("change", (e) => this._onChange(e));
     this.shadowRoot.addEventListener("input", (e) => this._onInput(e));
+    // Keep focus in the food field when a suggestion is tapped, so the tap lands as a click.
+    for (const ev of ["pointerdown", "mousedown"])
+      this.shadowRoot.addEventListener(ev, (e) => { if (e.target.closest(".sugg")) e.preventDefault(); });
+    this.shadowRoot.addEventListener("focusout", (e) => { if (e.target.classList?.contains("food")) this._hideSugg(); });
+  }
+
+  // Food names already used anywhere (all profiles, saved or still being edited), one per spelling-insensitive name.
+  _foodNames() {
+    const profiles = [...Object.values(this._profiles ?? {}), ...(this._draft ? [this._draft] : [])];
+    const names = new Map();
+    for (const p of profiles)
+      for (const m of [...Object.values(p.week).flat(), ...Object.values(p.exceptions).flat()])
+        for (const a of m.options.flat().flatMap((l) => l.alts)) {
+          const name = a.food.trim().replace(/\s+/g, " ");
+          if (name && !names.has(foldText(name))) names.set(foldText(name), name);
+        }
+    return names;
+  }
+
+  _suggest(input) {
+    this._hideSugg();
+    const q = foldText(input.value);
+    if (!q) return;
+    const hits = [...this._foodNames()].filter(([k]) => k.includes(q) && k !== q)
+      .sort(([a], [b]) => (b.startsWith(q) - a.startsWith(q)) || a.localeCompare(b)) // prefix matches first
+      .slice(0, 6).map(([, name]) => name);
+    if (!hits.length) return;
+    this._suggFor = input;
+    // After the × button when present, so the list spans the full row under the food field.
+    const anchor = input.nextElementSibling?.dataset.act === "delalt" ? input.nextElementSibling : input;
+    anchor.insertAdjacentHTML("afterend", `<div class="sugg" role="listbox">${hits.map((h) =>
+      `<button type="button" role="option" data-act="sugg" data-v="${esc(h)}">${esc(h)}</button>`).join("")}</div>`);
+  }
+
+  _hideSugg() {
+    this.shadowRoot.querySelectorAll(".sugg").forEach((s) => s.remove());
+    this._suggFor = null;
+  }
+
+  _pickSugg(value) {
+    const input = this._suggFor;
+    this._hideSugg();
+    if (!input?.isConnected) return;
+    input.value = value;
+    this._onChange({ target: input });
+    input.closest(".item")?.querySelector('[data-f="qty"]')?.focus();
   }
 
   set hass(hass) {
@@ -437,6 +491,7 @@ class SharedDietPanel extends HTMLElement {
     switch (d.act) {
       case "menu":
         return this.dispatchEvent(new Event("hass-toggle-menu", { bubbles: true, composed: true }));
+      case "sugg": return this._pickSugg(d.v);
       case "save": return this._save();
       case "create": return this._createProfile();
       case "delprofile": return this._deleteProfile();
@@ -520,6 +575,7 @@ class SharedDietPanel extends HTMLElement {
     if (this._busy || el.tagName !== "INPUT") return;
     if ("newname" in el.dataset) this._newName = el.value;
     else if (["pfield", "meal", "item"].includes(el.dataset.ch) && el.type !== "checkbox") this._onChange(e);
+    if (el.classList.contains("food")) this._suggest(el);
   }
 
   _onChange(e) {
@@ -628,11 +684,9 @@ class SharedDietPanel extends HTMLElement {
   _datalists() {
     const meals = Object.values(this._profiles).flatMap((p) => [...Object.values(p.week).flat(), ...Object.values(p.exceptions).flat()]);
     const items = meals.flatMap((m) => m.options.flat().flatMap((l) => l.alts));
-    // Same normalization as model.py shopping_items: collapsed spaces for foods, case-insensitive units.
-    const foods = [...new Set(items.map((i) => i.food.trim().replace(/\s+/g, " ")).filter(Boolean))].sort();
+    // Units: case-insensitive like model.py. Food suggestions use the in-panel list (_suggest): datalists are unreliable in the Companion app.
     const units = [...new Set(["g", "ml", "pz", ...items.map((i) => i.unit.trim().toLowerCase()).filter(Boolean)])];
-    return `<datalist id="foods">${foods.map((f) => `<option value="${esc(f)}">`).join("")}</datalist>
-      <datalist id="units">${units.map((u) => `<option value="${esc(u)}">`).join("")}</datalist>`;
+    return `<datalist id="units">${units.map((u) => `<option value="${esc(u)}">`).join("")}</datalist>`;
   }
 
   // Read-only resolved meals for a date (choices applied), optionally with all alternatives.
@@ -824,7 +878,7 @@ class SharedDietPanel extends HTMLElement {
         <div class="line-head">Alimento ${li + 1}</div>
         ${line.alts.map((a, ai) => `${ai ? `<div class="or">OPPURE</div>` : ""}
           <div class="item">
-            <input class="food" list="foods" value="${esc(a.food)}" placeholder="Alimento" aria-label="Alimento"
+            <input class="food" autocomplete="off" value="${esc(a.food)}" placeholder="Alimento" aria-label="Alimento"
               data-ch="item" data-f="food" ${at} data-l="${li}" data-a="${ai}">
             ${line.alts.length > 1 ? `<button class="icon" data-act="delalt" ${at} data-l="${li}" data-a="${ai}" aria-label="Rimuovi alimento">×</button>` : ""}
             <input type="number" min="0" step="any" value="${esc(a.qty ?? "")}" placeholder="Quantità" aria-label="Quantità"
