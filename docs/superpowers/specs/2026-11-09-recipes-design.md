@@ -92,6 +92,24 @@ Storage `shared_diet.data` (versione 1, migrazione al caricamento):
 - **[scelta del builder] Nomi delle ricette:** unici nel ricettario, confronto senza maiuscole/accenti/spazi doppi (`save_recipe` rifiuta duplicati). Possono coincidere con nomi di alimenti semplici. Il collegamento a una ricetta avviene solo scegliendola dai suggerimenti (mai per nome digitato). La riga-ricetta mostra il nome non modificabile e un tasto per tornare ad alimento semplice.
 - **[scelta del builder] Aggiornamenti:** una modifica al ricettario aggiorna subito sensori e pannelli aperti (stesso listener dello store). Nell'editor della dieta gli ingredienti mostrati si ricalcolano sempre dal ricettario corrente; le personalizzazioni di ingredienti non più esistenti vengono ignorate.
 
+## Aggiunta (2026-11-09): alternative OPPURE negli ingredienti
+
+Richiesta dell'utente dopo la prova: un ingrediente di ricetta può avere alternative ("Latte 100 ml OPPURE Bevanda di soia 120 ml"). Decisioni dell'utente: la scelta funziona **come le alternative dei pasti** (predefinita + ritocco per data nella scheda Scelte; senza scelta vale la prima). Le altre decisioni qui sotto sono state proposte dal builder e approvate dall'utente.
+
+### Modello dati (sostituisce la forma degli ingredienti sopra)
+- Ingrediente: `{id, alts: [{id, food, qty: float|null, unit}, …]}` con almeno 1 alternativa; id alternative unici nella ricetta (anche tra ingredienti diversi).
+- `recipe_qty[recipe_id][alt_id]` = grammatura personalizzata di **quell'alternativa** per la persona (solo numero ≥ 0, unità fissa).
+- Scelta (Choice) di un pasto: `{option, lines, recipes?}` con `recipes: {recipe_id: {ingredient_id: alt_id}}` (facoltativo, assente = `{}`). La scelta è per ricetta, non per riga: se la stessa ricetta compare due volte nello stesso pasto, vale la stessa scelta. Priorità invariata: ritocco per data > predefinita del pasto > prima alternativa. `alt_id` non più esistente → prima alternativa.
+- **Migrazione** al caricamento (storage versione invariata): ogni ingrediente nel vecchio formato `{id, food, qty, unit}` diventa `{id, alts: [{id: <stesso id>, food, qty, unit}]}`, così le personalizzazioni esistenti (`recipe_qty[rid][<vecchio ingredient id>]`) restano valide senza conversione.
+
+### Comportamento
+- Espansione (`expand_item` e mirror JS): per ogni ingrediente si usa l'alternativa scelta (dalla Choice del pasto per quella data) con la grammatura effettiva della persona; per "Vedi alternative" il pannello mostra anche le altre.
+- Spesa, sensori, promemoria, Oggi: solo l'alternativa scelta.
+- Scheda Ricette: "+ OPPURE" e rimozione per alternativa, come nell'editor dei pasti; ultima alternativa rimossa = ingrediente rimosso.
+- Riga-ricetta nel pasto: tutte le alternative di ogni ingrediente con il proprio campo grammatura per la persona.
+- Scheda Scelte: per i pasti che contengono ricette (come riga o alternativa) con ingredienti a più alternative, una tendina "<Ricetta> · Ingrediente N" con predefinita e ritocco per data, come per le righe.
+- Validazione websocket: ingredienti con `alts` non vuoto, id unici; Choice `recipes` con chiavi/valori stringhe non vuote. `save_profile` pota da `recipe_qty` le alternative inesistenti (come oggi per ingredienti).
+
 ## Lasciato al builder
 
 Struttura dei comandi websocket per le ricette, layout della scheda Ricette e della riga-ricetta (mobile-first, coerente con lo stile attuale), dettagli di migrazione, strategia di merge per le ricette.
