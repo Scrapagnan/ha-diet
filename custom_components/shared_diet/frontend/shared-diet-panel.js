@@ -75,7 +75,7 @@ const addDays = (s, n) => { const d = parseIso(s); d.setDate(d.getDate() + n); r
 const span = (a, b) => Math.round((parseIso(b) - parseIso(a)) / 864e5) + 1;
 const weekday = (s) => (parseIso(s).getDay() + 6) % 7; // 0 = lunedì, as in model.py
 const fmtDay = (s, opts) => parseIso(s).toLocaleDateString("it-IT", opts);
-const fmtItem = (it) => (it.qty !== null ? `${it.food} ${it.qty} ${it.unit}` : it.note ? `${it.food} (${it.note})` : it.food);
+const fmtItem = (it) => (!it ? "" : it.qty !== null ? `${it.food} ${it.qty} ${it.unit}` : it.note ? `${it.food} (${it.note})` : it.food);
 const blankItem = () => ({ food: "", qty: null, unit: "g", note: "" });
 const newMeal = () => ({ id: uid(), name: "Pasto", time: null, options: [[{ alts: [blankItem()] }]] });
 const zeroChoice = () => ({ option: 0, lines: {} });
@@ -89,7 +89,7 @@ function resolveMeal(meal, choice) {
   const items = meal.options[opt].map((line, i) => {
     const alt = choice.lines[String(i)] ?? 0;
     return line.alts[alt >= 0 && alt < line.alts.length ? alt : 0];
-  });
+  }).filter(Boolean); // a line emptied in the editor has no alternative to show
   return { option: opt, items };
 }
 
@@ -97,7 +97,9 @@ function resolveMeal(meal, choice) {
 const cleanItem = (a) => ({
   food: a.food.trim(), qty: Number.isFinite(a.qty) ? a.qty : null, unit: a.unit.trim(), note: a.note.trim(),
 });
-function cleanMeals(meals) {
+// `shape` is the option/line/alt counts: if cleaning changes it, indexes moved and the meal's choices are stale.
+const shape = (options) => JSON.stringify(options.map((o) => o.map((l) => l.alts.length)));
+function cleanMeals(meals, changed) {
   return meals.map((m) => {
     const name = m.name.trim();
     if (!name) throw new Error("Ogni pasto deve avere un nome");
@@ -105,19 +107,30 @@ function cleanMeals(meals) {
       .map((opt) => opt.map((line) => ({ alts: line.alts.filter((a) => a.food.trim()).map(cleanItem) })).filter((l) => l.alts.length))
       .filter((opt) => opt.length);
     if (!options.length) throw new Error(`«${name}»: inserisci almeno un alimento`);
+    if (shape(options) !== shape(m.options)) changed.add(m.id);
     return { id: m.id, name, time: m.time || null, options };
   });
 }
 function cleanProfile(p) {
   const name = p.name.trim();
   if (!name) throw new Error("Il nome del profilo è obbligatorio");
+  const changed = new Set();
   const week = {};
-  for (let d = 0; d < 7; d++) week[d] = cleanMeals(p.week[d]);
-  const exceptions = Object.fromEntries(Object.entries(p.exceptions).map(([s, meals]) => [s, cleanMeals(meals)]));
+  for (let d = 0; d < 7; d++) week[d] = cleanMeals(p.week[d], changed);
+  const exceptions = Object.fromEntries(Object.entries(p.exceptions).map(([s, meals]) => [s, cleanMeals(meals, changed)]));
+  // Choices index into options/lines/alts: drop those of meals whose structure changed or that no longer exist.
+  const live = new Set([...Object.values(week).flat(), ...Object.values(exceptions).flat()].map((m) => m.id));
+  const keep = (mid) => live.has(mid) && !changed.has(mid);
+  const choices = { defaults: {}, dates: {} };
+  for (const [mid, c] of Object.entries(p.choices.defaults)) if (keep(mid)) choices.defaults[mid] = c;
+  for (const [date, byMeal] of Object.entries(p.choices.dates)) {
+    const kept = Object.fromEntries(Object.entries(byMeal).filter(([mid]) => keep(mid)));
+    if (Object.keys(kept).length) choices.dates[date] = kept;
+  }
   return {
     id: p.id, name, person: p.person || null,
     reminder: { enabled: Boolean(p.reminder.enabled), minutes: p.reminder.minutes, notify: p.reminder.notify || null },
-    week, exceptions, choices: p.choices, rev: p.rev,
+    week, exceptions, choices, rev: p.rev,
   };
 }
 
@@ -331,6 +344,7 @@ class SharedDietPanel extends HTMLElement {
       this._msg = null;
       return this._render();
     }
+    if (this._busy && d.act !== "menu") return; // nothing may change while a save is in flight
     switch (d.act) {
       case "menu":
         return this.dispatchEvent(new Event("hass-toggle-menu", { bubbles: true, composed: true }));
@@ -375,19 +389,37 @@ class SharedDietPanel extends HTMLElement {
         list.splice(i, 1);
         break;
       case "addopt": list[i].options.push([{ alts: [blankItem()] }]); break;
-      case "delopt": list[i].options.splice(oi, 1); break;
+      case "delopt": list[i].options.splice(oi, 1); this._forgetChoices(list[i].id); break;
       case "addline": list[i].options[oi].push({ alts: [blankItem()] }); break;
-      case "delline": list[i].options[oi].splice(li, 1); break;
+      case "delline": list[i].options[oi].splice(li, 1); this._forgetChoices(list[i].id); break;
       case "addalt": list[i].options[oi][li].alts.push(blankItem()); break;
-      case "delalt": list[i].options[oi][li].alts.splice(ai, 1); break;
+      case "delalt": {
+        // Removing the sole alternative removes the line: an empty line would have nothing to show.
+        const alts = list[i].options[oi][li].alts;
+        if (alts.length > 1) alts.splice(ai, 1);
+        else list[i].options[oi].splice(li, 1);
+        this._forgetChoices(list[i].id);
+        break;
+      }
       default: return;
     }
     this._edit();
   }
 
+  // Removing an option, line or alternative shifts indexes: the meal's stored choices can no longer be trusted.
+  _forgetChoices(mid) {
+    const c = this._draft.choices;
+    delete c.defaults[mid];
+    for (const [date, byMeal] of Object.entries(c.dates)) {
+      delete byMeal[mid];
+      if (!Object.keys(byMeal).length) delete c.dates[date];
+    }
+  }
+
   _onChange(e) {
     const el = e.target;
     const d = el.dataset;
+    if (this._busy) return; // the success path replaces the draft, so an edit now would be lost
     switch (d.ch) {
       case "pick": return this._selectProfile(el.value);
       case "date":
@@ -451,7 +483,7 @@ class SharedDietPanel extends HTMLElement {
         <nav class="tabs" role="tablist">
           ${TABS.map(([k, l]) => `<button class="tab${k === this._view ? " on" : ""}" data-tab="${k}" role="tab">${l}</button>`).join("")}
         </nav>
-        <main>${this._body()}</main>
+        <main${this._busy ? " inert" : ""}>${this._body()}</main>
       </div>`;
   }
 
@@ -669,7 +701,7 @@ class SharedDietPanel extends HTMLElement {
           <div class="item">
             <input class="food" list="foods" value="${esc(a.food)}" placeholder="Alimento" aria-label="Alimento"
               data-ch="item" data-f="food" ${at} data-l="${li}" data-a="${ai}">
-            <button class="icon" data-act="delalt" ${at} data-l="${li}" data-a="${ai}" aria-label="Rimuovi alimento">×</button>
+            ${line.alts.length > 1 ? `<button class="icon" data-act="delalt" ${at} data-l="${li}" data-a="${ai}" aria-label="Rimuovi alimento">×</button>` : ""}
             <input type="number" min="0" step="any" value="${esc(a.qty ?? "")}" placeholder="Quantità" aria-label="Quantità"
               data-ch="item" data-f="qty" ${at} data-l="${li}" data-a="${ai}">
             <input list="units" value="${esc(a.unit)}" placeholder="Unità" aria-label="Unità"
