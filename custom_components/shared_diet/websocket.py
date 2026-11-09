@@ -15,7 +15,7 @@ from homeassistant.helpers import config_validation as cv
 
 from .const import DOMAIN
 from .model import shopping_items
-from .store import ConflictError, DietStore
+from .store import ConflictError, DietStore, DuplicateNameError, InUseError
 
 MAX_SPAN_DAYS = 62
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}", re.ASCII)
@@ -65,6 +65,19 @@ def _qty(value: Any) -> float | None:
     return number
 
 
+def _unique_ids(items: list) -> list:
+    ids = [i["id"] for i in items]
+    if len(set(ids)) != len(ids):
+        raise vol.Invalid("ingredient ids must be unique")
+    return items
+
+
+def _nonnull_qty(value: Any) -> float:
+    if value is None:
+        raise vol.Invalid("expected number >= 0")
+    return _qty(value)
+
+
 NON_EMPTY = vol.All(str, vol.Length(min=1))
 TIME = _pattern(r"([01]\d|2[0-3]):[0-5]\d")
 PERSON = vol.Any(None, _pattern(r"person\.[a-z0-9_]+"))
@@ -76,7 +89,24 @@ ITEM = {
     vol.Required("unit"): str,
     vol.Required("note"): str,
 }
-LINE = {vol.Required("alts"): vol.All([ITEM], vol.Length(min=1))}
+ITEM_OR_RECIPE = vol.Any(ITEM, {vol.Required("recipe"): NON_EMPTY})
+INGREDIENT = {
+    vol.Required("id"): NON_EMPTY,
+    vol.Required("food"): NON_EMPTY,
+    vol.Required("qty"): _qty,
+    vol.Required("unit"): str,
+}
+RECIPE_SCHEMA = vol.Schema(
+    {
+        vol.Required("id"): NON_EMPTY,
+        vol.Required("name"): NON_EMPTY,
+        vol.Required("note"): str,
+        vol.Required("ingredients"): vol.All([INGREDIENT], _unique_ids),
+        vol.Required("rev"): _int(1),
+    },
+    extra=vol.PREVENT_EXTRA,
+)
+LINE = {vol.Required("alts"): vol.All([ITEM_OR_RECIPE], vol.Length(min=1))}
 MEAL = {
     vol.Required("id"): NON_EMPTY,
     vol.Required("name"): NON_EMPTY,
@@ -104,7 +134,7 @@ PROFILE_SCHEMA = vol.Schema(
             vol.Required("dates"): {_iso_date: {NON_EMPTY: CHOICE}},
         },
         vol.Optional("recipe_qty", default=dict): {
-            NON_EMPTY: {NON_EMPTY: vol.All(vol.Coerce(float), vol.Range(min=0))}
+            NON_EMPTY: {NON_EMPTY: _nonnull_qty}
         },
         vol.Required("rev"): _int(1),
     },
@@ -128,7 +158,9 @@ async def ws_subscribe(hass: HomeAssistant, connection: websocket_api.ActiveConn
 
     @callback
     def push() -> None:
-        connection.send_message(websocket_api.event_message(msg["id"], {"profiles": store.profiles}))
+        connection.send_message(
+            websocket_api.event_message(msg["id"], {"profiles": store.profiles, "recipes": store.recipes})
+        )
 
     connection.subscriptions[msg["id"]] = store.async_add_listener(push)
     connection.send_result(msg["id"])
@@ -160,6 +192,9 @@ async def ws_save_profile(hass: HomeAssistant, connection: websocket_api.ActiveC
     except KeyError:
         connection.send_error(msg["id"], "not_found", "Profilo non trovato")
         return
+    except ValueError:
+        connection.send_error(msg["id"], "invalid_format", "Riferimento a ricetta non valido")
+        return
     except ConflictError:
         connection.send_error(msg["id"], "conflict", "Profilo modificato da un altro utente")
         return
@@ -175,6 +210,60 @@ async def ws_delete_profile(hass: HomeAssistant, connection: websocket_api.Activ
     if store is None:
         return
     await store.async_delete_profile(msg["profile_id"])
+    connection.send_result(msg["id"], {})
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): "shared_diet/create_recipe", vol.Required("name"): NON_EMPTY}
+)
+@websocket_api.async_response
+async def ws_create_recipe(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    store = _store(hass, connection, msg)
+    if store is None:
+        return
+    try:
+        recipe = await store.async_create_recipe(msg["name"])
+    except DuplicateNameError:
+        connection.send_error(msg["id"], "duplicate_name", "Esiste già una ricetta con questo nome")
+        return
+    connection.send_result(msg["id"], {"recipe": recipe})
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): "shared_diet/save_recipe", vol.Required("recipe"): RECIPE_SCHEMA}
+)
+@websocket_api.async_response
+async def ws_save_recipe(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    store = _store(hass, connection, msg)
+    if store is None:
+        return
+    try:
+        recipe = await store.async_save_recipe(msg["recipe"])
+    except KeyError:
+        connection.send_error(msg["id"], "not_found", "Ricetta non trovata")
+        return
+    except ConflictError:
+        connection.send_error(msg["id"], "conflict", "Ricetta modificata da un altro utente")
+        return
+    except DuplicateNameError:
+        connection.send_error(msg["id"], "duplicate_name", "Esiste già una ricetta con questo nome")
+        return
+    connection.send_result(msg["id"], {"recipe": recipe})
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): "shared_diet/delete_recipe", vol.Required("recipe_id"): str}
+)
+@websocket_api.async_response
+async def ws_delete_recipe(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    store = _store(hass, connection, msg)
+    if store is None:
+        return
+    try:
+        await store.async_delete_recipe(msg["recipe_id"])
+    except InUseError as err:
+        connection.send_error(msg["id"], "in_use", str(err))
+        return
     connection.send_result(msg["id"], {})
 
 
@@ -206,7 +295,7 @@ async def ws_shopping(hass: HomeAssistant, connection: websocket_api.ActiveConne
             return
         selected = [profiles[pid] for pid in dict.fromkeys(msg["profile_ids"])]
 
-    items = shopping_items(selected, start, end)
+    items = shopping_items(selected, start, end, store.recipes)
     for text in items:
         await hass.services.async_call(
             "todo",
@@ -217,7 +306,16 @@ async def ws_shopping(hass: HomeAssistant, connection: websocket_api.ActiveConne
     connection.send_result(msg["id"], {"items": items})
 
 
-COMMANDS = (ws_subscribe, ws_create_profile, ws_save_profile, ws_delete_profile, ws_shopping)
+COMMANDS = (
+    ws_subscribe,
+    ws_create_profile,
+    ws_save_profile,
+    ws_delete_profile,
+    ws_create_recipe,
+    ws_save_recipe,
+    ws_delete_recipe,
+    ws_shopping,
+)
 
 
 @callback

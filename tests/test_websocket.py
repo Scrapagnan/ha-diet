@@ -158,7 +158,7 @@ async def test_subscribe_pushes_on_change(client):
     await client.send_json_auto_id({"type": "shared_diet/subscribe"})
     assert (await client.receive_json())["success"]
     event = await client.receive_json()
-    assert event["type"] == "event" and event["event"] == {"profiles": {}}
+    assert event["type"] == "event" and event["event"] == {"profiles": {}, "recipes": {}}
 
     await client.send_json_auto_id({"type": "shared_diet/create_profile", "name": "Ana"})
     msgs = [await client.receive_json(), await client.receive_json()]
