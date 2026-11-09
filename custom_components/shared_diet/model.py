@@ -68,3 +68,31 @@ def current_and_next(profile: dict, now: datetime) -> tuple[dict | None, dict | 
     cur_r = resolve_meal(cur, choice_for(profile, cur_day, cur["id"])) if cur else None
     nxt_r = resolve_meal(nxt, choice_for(profile, nxt_day, nxt["id"])) if nxt else None
     return cur_r, nxt_r
+
+
+def shopping_items(profiles: list[dict], start: date, end: date) -> list[str]:
+    """Aggregated shopping list over [start, end] (inclusive), sorted by normalized food name then unit."""
+    totals: dict[tuple[str, str], tuple[str, float]] = {}  # (food, unit) -> (first spelling, sum)
+    untimed: dict[str, tuple[str, str]] = {}  # food -> (first spelling, note)
+    day = start
+    while day <= end:
+        for p in profiles:
+            for meal in effective_day(p, day):
+                for item in resolve_meal(meal, choice_for(p, day, meal["id"]))["items"]:
+                    food = item["food"].strip()
+                    norm = food.casefold()
+                    if item["qty"] is None:
+                        untimed.setdefault(norm, (food, item["note"].strip()))
+                    else:
+                        key = (norm, item["unit"].strip())
+                        name, qty = totals.get(key, (food, 0.0))
+                        totals[key] = (name, qty + item["qty"])
+        day += timedelta(days=1)
+    numeric_foods = {norm for norm, _ in totals}
+    rows = [(norm, unit, f"{name} — {qty:g} {unit}") for (norm, unit), (name, qty) in totals.items()]
+    rows += [
+        (norm, "", f"{name} ({note})" if note else name)
+        for norm, (name, note) in untimed.items()
+        if norm not in numeric_foods
+    ]
+    return [text for _, _, text in sorted(rows)]
