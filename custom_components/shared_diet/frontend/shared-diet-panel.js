@@ -83,6 +83,9 @@ const fmtDay = (s, opts) => parseIso(s).toLocaleDateString("it-IT", opts);
 const fmtItem = (it) => (!it ? "" : it.qty !== null ? `${it.food} ${it.qty} ${it.unit}` : it.note ? `${it.food} (${it.note})` : it.food);
 const blankItem = () => ({ food: "", qty: null, unit: "g", note: "" });
 const newMeal = () => ({ id: uid(), name: "Pasto", time: null, options: [[{ alts: [blankItem()] }]] });
+// Selector of a food input in the meal editor (to focus a just-added field). ctx is a weekday digit or an ISO date.
+const foodSel = (ctx, i, o, l, a) =>
+  `input.food[data-ctx="${ctx}"][data-i="${i}"][data-o="${o}"][data-l="${l}"][data-a="${a}"]`;
 const zeroChoice = () => ({ option: 0, lines: {} });
 const hasChoice = (m) => m.options.length > 1 || m.options.some((o) => o.some((l) => l.alts.length > 1));
 
@@ -463,7 +466,10 @@ class SharedDietPanel extends HTMLElement {
     const list = this._list(d.ctx);
     const i = Number(d.i), oi = Number(d.o), li = Number(d.l), ai = Number(d.a);
     switch (d.act) {
-      case "addmeal": list.push(newMeal()); break;
+      case "addmeal":
+        list.push(newMeal());
+        this._focus = `[data-ch="meal"][data-f="name"][data-ctx="${d.ctx}"][data-i="${list.length - 1}"]`;
+        break;
       case "up":
       case "down": {
         const j = d.act === "up" ? i - 1 : i + 1;
@@ -476,9 +482,15 @@ class SharedDietPanel extends HTMLElement {
         break;
       case "addopt": list[i].options.push([{ alts: [blankItem()] }]); break;
       case "delopt": list[i].options.splice(oi, 1); this._forgetChoices(list[i].id); break;
-      case "addline": list[i].options[oi].push({ alts: [blankItem()] }); break;
+      case "addline":
+        list[i].options[oi].push({ alts: [blankItem()] });
+        this._focus = foodSel(d.ctx, i, oi, list[i].options[oi].length - 1, 0);
+        break;
       case "delline": list[i].options[oi].splice(li, 1); this._forgetChoices(list[i].id); break;
-      case "addalt": list[i].options[oi][li].alts.push(blankItem()); break;
+      case "addalt":
+        list[i].options[oi][li].alts.push(blankItem());
+        this._focus = foodSel(d.ctx, i, oi, li, list[i].options[oi][li].alts.length - 1);
+        break;
       case "delalt": {
         // Removing the sole alternative removes the line: an empty line would have nothing to show.
         const alts = list[i].options[oi][li].alts;
@@ -579,6 +591,12 @@ class SharedDietPanel extends HTMLElement {
         </nav>
         <main${this._busy ? " inert" : ""}>${this._body()}</main>
       </div>`;
+    // Re-rendering drops focus; move it to the field the user just added and bring it into view.
+    if (this._focus) {
+      const el = this.shadowRoot.querySelector(this._focus);
+      this._focus = null;
+      if (el) { el.focus({ preventScroll: true }); el.scrollIntoView({ block: "center" }); }
+    }
   }
 
   _body() {
