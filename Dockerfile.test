@@ -1,3 +1,5 @@
 FROM python:3.14
-RUN pip install -q uv && uv pip install --system -q pytest-homeassistant-custom-component
+RUN pip install -q uv
 WORKDIR /app
+COPY requirements_test.txt /tmp/requirements_test.txt
+RUN uv pip install --system -q -r /tmp/requirements_test.txt

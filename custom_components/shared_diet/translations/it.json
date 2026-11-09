@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Dieta condivisa",
+        "description": "Configurare il gestore della dieta condivisa di famiglia?"
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "È consentita una sola istanza di Dieta condivisa."
+    }
+  }
+}
