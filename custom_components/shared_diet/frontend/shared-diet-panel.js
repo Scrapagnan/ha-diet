@@ -113,6 +113,8 @@ const foldText = (s) => s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().
 const foodSel = (ctx, i, o, l, a) =>
   `input.food[data-ctx="${ctx}"][data-i="${i}"][data-o="${o}"][data-l="${l}"][data-a="${a}"]`;
 const zeroChoice = () => ({ option: 0, lines: {} });
+// Meals by time ("HH:MM" compares as text); meals without a time last. Stable: equal times keep their order.
+const byTime = (a, b) => { const x = a.time || "~", y = b.time || "~"; return x < y ? -1 : x > y ? 1 : 0; };
 // A meal offers choices with several options or lines, or with a recipe that has an ingredient with alternatives.
 const hasChoice = (m, recipes) => m.options.length > 1 || m.options.some((o) => o.some((l) => l.alts.length > 1
   || l.alts.some((a) => "recipe" in a && recipeOf(a.recipe, recipes)?.ingredients.some((g) => g.alts.length > 1))));
@@ -782,10 +784,12 @@ class SharedDietPanel extends HTMLElement {
         if (isWeekCtx(d.ctx)) this._foldToggled.add(`${d.ctx}:${list.at(-1).id}`); // a new meal opens for filling in
         this._focus = `[data-ch="meal"][data-f="name"][data-ctx="${d.ctx}"][data-i="${list.length - 1}"]`;
         break;
-      case "up":
-      case "down": {
-        const j = d.act === "up" ? i - 1 : i + 1;
-        if (j >= 0 && j < list.length) [list[i], list[j]] = [list[j], list[i]];
+      case "lup":
+      case "ldown": {
+        const opt = list[i].options[oi], j = d.act === "lup" ? li - 1 : li + 1;
+        if (j < 0 || j >= opt.length) return;
+        [opt[li], opt[j]] = [opt[j], opt[li]];
+        this._swapLineChoices(list[i].id, oi, li, j);
         break;
       }
       case "delmeal":
@@ -818,6 +822,19 @@ class SharedDietPanel extends HTMLElement {
       default: return;
     }
     this._edit();
+  }
+
+  // Moving a line: its chosen alternative (keyed by line index) moves with it.
+  _swapLineChoices(mid, oi, a, b) {
+    const c = this._draft.choices;
+    for (const ch of [c.defaults[mid], ...Object.values(c.dates).map((day) => day[mid])]) {
+      if (!ch || ch.option !== oi) continue;
+      const x = ch.lines[a], y = ch.lines[b];
+      delete ch.lines[a];
+      delete ch.lines[b];
+      if (x !== undefined) ch.lines[b] = x;
+      if (y !== undefined) ch.lines[a] = y;
+    }
   }
 
   // Removing an option, line or alternative shifts indexes: the meal's stored choices can no longer be trusted.
@@ -989,7 +1006,7 @@ class SharedDietPanel extends HTMLElement {
         ? `<ul class="muted">${i.ingredients.map((g) => `<li>${esc(fmtItem(g))}</li>`).join("")}${otherAlts(i)}</ul>` : ""}${
         i.note.trim() ? `<details><summary>Preparazione</summary><p>${esc(i.note)}</p></details>` : ""}</li>`
       : `<li>${esc(fmtItem(i))}</li>`);
-    return meals.map((m) => {
+    return [...meals].sort(byTime).map((m) => {
       const r = resolveMeal(m, choiceFor(p, s, m.id), p, this._recipes);
       const alts = m.options.map((opt, oi) => `<li class="${oi === r.option ? "" : "muted"}">${m.options.length > 1 ? `Opzione ${oi + 1}: ` : ""}${
         opt.map((l) => l.alts.map((a) => esc("recipe" in a ? itemLabel(a, this._recipes) : fmtItem(a))).join(" / ")).join(" + ")}</li>`).join("");
@@ -1205,11 +1222,12 @@ class SharedDietPanel extends HTMLElement {
   }
 
   _mealEditor(ctx, meals) {
-    return meals.map((m, i) => this._mealCard(ctx, m, i, meals.length)).join("")
+    meals.sort(byTime); // in place: data-i indexes address the sorted list, and it is saved in this order
+    return meals.map((m, i) => this._mealCard(ctx, m, i)).join("")
       + `<button class="add" data-act="addmeal" data-ctx="${esc(ctx)}">+ Aggiungi pasto</button>`;
   }
 
-  _mealCard(ctx, m, i, n) {
+  _mealCard(ctx, m, i) {
     const at = `data-ctx="${esc(ctx)}" data-i="${i}"`;
     const key = `${ctx}:${m.id}`;
     const folded = isWeekCtx(ctx) !== this._foldToggled.has(key);
@@ -1227,8 +1245,6 @@ class SharedDietPanel extends HTMLElement {
     return `<section class="card">${head}
       ${m.options.map((opt, oi) => this._optionEditor(ctx, i, oi, opt, m.options.length)).join("")}
       <div class="row">
-        <button data-act="up" ${at}${i === 0 ? " disabled" : ""} aria-label="Sposta su">↑</button>
-        <button data-act="down" ${at}${i === n - 1 ? " disabled" : ""} aria-label="Sposta giù">↓</button>
         <button class="danger" data-act="delmeal" ${at}>Elimina pasto</button>
       </div>
     </section>`;
@@ -1278,6 +1294,8 @@ class SharedDietPanel extends HTMLElement {
           </div>`;
         }).join("")}
         <div class="row">
+          <button data-act="lup" ${at} data-l="${li}"${li === 0 ? " disabled" : ""} aria-label="Sposta su">↑</button>
+          <button data-act="ldown" ${at} data-l="${li}"${li === opt.length - 1 ? " disabled" : ""} aria-label="Sposta giù">↓</button>
           <button data-act="addalt" ${at} data-l="${li}">+ OPPURE</button>
           <button class="danger" data-act="delline" ${at} data-l="${li}">Rimuovi alimento</button>
         </div>

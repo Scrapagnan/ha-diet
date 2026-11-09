@@ -440,4 +440,27 @@ const RECIPES = {
   assert.match(p._body(), /Caffè freddo · Ingrediente 2/);
 }
 
+{
+  // Settimana: meals sorted by time (no time last); a food line moves up/down within its meal, its chosen alternative with it.
+  const p = new SharedDietPanel();
+  p._render = () => {};
+  p._profiles = {};
+  p._recipes = {};
+  const f = (food) => ({ food, qty: null, unit: "", note: "" });
+  const day = [
+    { id: "a", name: "Cena", time: "20:00", options: [[{ alts: [f("Pasta")] }]] },
+    { id: "b", name: "Spuntino", time: null, options: [[{ alts: [f("Mela")] }]] },
+    { id: "c", name: "Colazione", time: "07:30", options: [[{ alts: [f("Latte"), f("Tè")] }, { alts: [f("Pane")] }]] },
+  ];
+  const week = {}; for (let d = 0; d < 7; d++) week[d] = d === 0 ? day : [];
+  p._draft = { name: "P", week, exceptions: {}, choices: { defaults: { c: { option: 0, lines: { 0: 1 } } }, dates: {} }, recipe_qty: {} };
+  p._mealEditor("w0", week[0]);
+  assert.deepEqual(week[0].map((m) => m.id), ["c", "a", "b"]);
+  p._onClick({ target: { closest: () => ({ dataset: { act: "ldown", ctx: "w0", i: "0", o: "0", l: "0" } }) } });
+  assert.deepEqual(week[0][0].options[0].map((l) => l.alts[0].food), ["Pane", "Latte"]);
+  assert.deepEqual({ ...p._draft.choices.defaults.c.lines }, { 1: 1 });
+  p._onClick({ target: { closest: () => ({ dataset: { act: "lup", ctx: "w0", i: "0", o: "0", l: "0" } }) } }); // already first
+  assert.deepEqual(week[0][0].options[0].map((l) => l.alts[0].food), ["Pane", "Latte"]);
+}
+
 console.log("resolve.test.mjs: all assertions passed");
