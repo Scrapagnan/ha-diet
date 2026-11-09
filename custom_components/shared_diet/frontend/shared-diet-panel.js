@@ -119,16 +119,28 @@ const hasChoice = (m) => m.options.length > 1 || m.options.some((o) => o.some((l
 const effectiveDay = (p, s) => p.exceptions[s] ?? p.week[String(weekday(s))];
 const choiceFor = (p, s, mid) => p.choices.dates[s]?.[mid] ?? p.choices.defaults[mid] ?? zeroChoice();
 const recipeOf = (rid, recipes) => (Object.hasOwn(recipes, rid) ? recipes[rid] : null);
-// Mirrors model.py expand_item: a recipe item becomes its name and ingredients with the person's grams (override, else default).
-function expandItem(item, profile, recipes) {
+// Mirrors model.py expand_item: a recipe item becomes its name and, per ingredient, the chosen alternative with the person's grams
+// (override by alt id, else default). Ingredients with 2+ alternatives also list them in `choices`.
+function expandItem(item, profile, recipes, recipeChoice = {}) {
   if (!("recipe" in item)) return item;
   const recipe = recipeOf(item.recipe, recipes);
-  if (!recipe) return { recipe: item.recipe, food: "Ricetta mancante", note: "", ingredients: [], missing: true };
+  if (!recipe) return { recipe: item.recipe, food: "Ricetta mancante", note: "", ingredients: [], missing: true, choices: [] };
   const overrides = profile.recipe_qty?.[item.recipe] ?? {};
-  const ingredients = recipe.ingredients.map((i) => ({
-    food: i.food, qty: Object.hasOwn(overrides, i.id) ? overrides[i.id] : i.qty, unit: i.unit, note: "",
-  }));
-  return { recipe: item.recipe, food: recipe.name, note: recipe.note, ingredients, missing: false };
+  const grams = (a) => (Object.hasOwn(overrides, a.id) ? overrides[a.id] : a.qty);
+  const ingredients = [];
+  const choices = [];
+  for (const ing of recipe.ingredients) {
+    const alt = ing.alts.find((a) => a.id === recipeChoice[ing.id]) ?? ing.alts[0];
+    ingredients.push({ food: alt.food, qty: grams(alt), unit: alt.unit, note: "" });
+    if (ing.alts.length >= 2) {
+      choices.push({
+        ingredient_id: ing.id,
+        alts: ing.alts.map((a) => ({ id: a.id, food: a.food, qty: grams(a), unit: a.unit })),
+        chosen: alt.id,
+      });
+    }
+  }
+  return { recipe: item.recipe, food: recipe.name, note: recipe.note, ingredients, missing: false, choices };
 }
 // Display name of a meal item: the recipe's name, or the food name ("Ricetta mancante" if the recipe was deleted).
 const itemLabel = (item, recipes) => ("recipe" in item ? recipeOf(item.recipe, recipes)?.name ?? "Ricetta mancante" : item.food);
@@ -154,7 +166,7 @@ function resolveMeal(meal, choice, profile, recipes) {
   const items = meal.options[opt].map((line, i) => {
     const alt = choice.lines[String(i)] ?? 0;
     const a = line.alts[alt >= 0 && alt < line.alts.length ? alt : 0];
-    return a && expandItem(a, profile ?? {}, recipes ?? {});
+    return a && expandItem(a, profile ?? {}, recipes ?? {}, choice.recipes?.[a.recipe] ?? {});
   }).filter(Boolean); // a line emptied in the editor has no alternative to show
   return { option: opt, items };
 }
@@ -246,16 +258,19 @@ function mergeProfiles(base, mine, theirs) {
   return { merged, overlaps };
 }
 
-// Cleans a recipe draft before saving: trims, drops ingredients without food. Mirrors cleanProfile.
+// Cleans a recipe draft before saving: trims, drops alternatives without food and ingredients left without any. Mirrors cleanProfile.
 function cleanRecipe(r) {
   const name = r.name.trim();
   if (!name) throw new Error("Il nome della ricetta è obbligatorio");
   return {
     id: r.id, name, note: r.note.trim(),
-    ingredients: r.ingredients.filter((i) => i.food.trim()).map((i) => {
-      if (i.qty < 0) throw new Error("La quantità non può essere negativa");
-      return { id: i.id, food: i.food.trim(), qty: Number.isFinite(i.qty) ? i.qty : null, unit: i.unit.trim() };
-    }),
+    ingredients: r.ingredients.map((g) => ({
+      id: g.id,
+      alts: g.alts.filter((a) => a.food.trim()).map((a) => {
+        if (a.qty < 0) throw new Error("La quantità non può essere negativa");
+        return { id: a.id, food: a.food.trim(), qty: Number.isFinite(a.qty) ? a.qty : null, unit: a.unit.trim() };
+      }),
+    })).filter((g) => g.alts.length),
     rev: r.rev,
   };
 }
@@ -310,9 +325,9 @@ class SharedDietPanel extends HTMLElement {
           if ("recipe" in a) continue; // recipe names are not food names
           add(a.food);
         }
-    // Recipe ingredients are foods too.
+    // Recipe ingredients' alternatives are foods too.
     for (const r of [...Object.values(this._recipes), ...(this._recipeDraft ? [this._recipeDraft] : [])])
-      for (const i of r.ingredients) add(i.food);
+      for (const g of r.ingredients) for (const a of g.alts) add(a.food);
     return names;
   }
 
@@ -332,7 +347,7 @@ class SharedDietPanel extends HTMLElement {
       ...recipes.map((r) => `<button type="button" role="option" data-act="sugg-recipe" data-rid="${esc(r.id)}">${esc(r.name)}<span class="tag">Ricetta</span></button>`),
     ].join("");
     // After the × button when present, so the list spans the full row under the food field.
-    const anchor = input.nextElementSibling?.dataset.act === "delalt" ? input.nextElementSibling : input;
+    const anchor = input.nextElementSibling?.tagName === "BUTTON" ? input.nextElementSibling : input;
     anchor.insertAdjacentHTML("afterend", `<div class="sugg" role="listbox">${html}</div>`);
   }
 
@@ -717,9 +732,20 @@ class SharedDietPanel extends HTMLElement {
       case "rdelete": return this._deleteRecipe();
       case "ropen": return this._selectRecipe(d.rid);
       case "raddingr":
-        this._recipeDraft.ingredients.push({ id: uid(), food: "", qty: null, unit: "g" });
-        this._focus = `[data-ch="ring"][data-f="food"][data-i="${this._recipeDraft.ingredients.length - 1}"]`;
+        this._recipeDraft.ingredients.push({ id: uid(), alts: [{ id: uid(), food: "", qty: null, unit: "g" }] });
+        this._focus = `[data-ch="ring"][data-f="food"][data-i="${this._recipeDraft.ingredients.length - 1}"][data-a="0"]`;
         return this._recipeEdit();
+      case "raddalt": {
+        const g = this._recipeDraft.ingredients[Number(d.i)];
+        g.alts.push({ id: uid(), food: "", qty: null, unit: "g" });
+        this._focus = `[data-ch="ring"][data-f="food"][data-i="${d.i}"][data-a="${g.alts.length - 1}"]`;
+        return this._recipeEdit();
+      }
+      case "rdelalt": {
+        const g = this._recipeDraft.ingredients[Number(d.i)];
+        if (g.alts.length > 1) g.alts.splice(Number(d.a), 1); // the last alternative goes with "Rimuovi ingrediente"
+        return this._recipeEdit();
+      }
       case "rdelingr":
         this._recipeDraft.ingredients.splice(Number(d.i), 1);
         return this._recipeEdit();
@@ -833,8 +859,8 @@ class SharedDietPanel extends HTMLElement {
         this._recipeDraft[d.f] = el.value; // name or note
         return this._markRecipeDirty();
       case "ring": {
-        const ing = this._recipeDraft.ingredients[Number(d.i)];
-        ing[d.f] = d.f === "qty" ? (el.value === "" ? null : Number(el.value)) : el.value;
+        const alt = this._recipeDraft.ingredients[Number(d.i)].alts[Number(d.a)];
+        alt[d.f] = d.f === "qty" ? (el.value === "" ? null : Number(el.value)) : el.value;
         return this._markRecipeDirty();
       }
       case "stodo": this._shop.todo = el.value; return;
@@ -932,7 +958,7 @@ class SharedDietPanel extends HTMLElement {
     const meals = Object.values(this._profiles).flatMap((p) => [...Object.values(p.week).flat(), ...Object.values(p.exceptions).flat()]);
     const items = [
       ...meals.flatMap((m) => m.options.flat().flatMap((l) => l.alts)).filter((i) => !("recipe" in i)),
-      ...Object.values(this._recipes).flatMap((r) => r.ingredients),
+      ...Object.values(this._recipes).flatMap((r) => r.ingredients.flatMap((g) => g.alts)),
     ];
     // Units: case-insensitive like model.py. Food suggestions use the in-panel list (_suggest): datalists are unreliable in the Companion app.
     const units = [...new Set(["g", "ml", "pz", ...items.map((i) => i.unit.trim().toLowerCase()).filter(Boolean)])];
@@ -944,9 +970,15 @@ class SharedDietPanel extends HTMLElement {
     const meals = effectiveDay(p, s);
     if (!meals.length) return `<p class="muted">Nessun pasto.</p>`;
     // Recipe: name, ingredients with the person's grams, preparation note folded away.
+    // With "Vedi alternative": the ingredients' other alternatives, greyed out, after the chosen ones.
+    const otherAlts = (i) => (withAlts ? i.choices.map((c) => {
+      const chosen = c.alts.find((a) => a.id === c.chosen);
+      const others = c.alts.filter((a) => a.id !== c.chosen).map((a) => fmtItem(a)).join(" / ");
+      return `<li class="muted">Alternativa a ${esc(chosen.food)}: ${esc(others)}</li>`;
+    }).join("") : "");
     const itemHtml = (i) => ("recipe" in i
       ? `<li><strong>${esc(i.food)}</strong>${i.ingredients.length
-        ? `<ul class="muted">${i.ingredients.map((g) => `<li>${esc(fmtItem(g))}</li>`).join("")}</ul>` : ""}${
+        ? `<ul class="muted">${i.ingredients.map((g) => `<li>${esc(fmtItem(g))}</li>`).join("")}${otherAlts(i)}</ul>` : ""}${
         i.note.trim() ? `<details><summary>Preparazione</summary><p>${esc(i.note)}</p></details>` : ""}</li>`
       : `<li>${esc(fmtItem(i))}</li>`);
     return meals.map((m) => {
@@ -1092,15 +1124,24 @@ class SharedDietPanel extends HTMLElement {
       </div>`;
     const ings = r.ingredients.map((g, k) => `<div class="line">
         <div class="line-head">Ingrediente ${k + 1}</div>
-        <div class="item">
-          <input class="food" autocomplete="off" value="${esc(g.food)}" placeholder="Alimento" aria-label="Alimento"
-            data-ch="ring" data-f="food" data-i="${k}">
-          <input type="number" min="0" step="any" value="${esc(g.qty)}" placeholder="Quantità" aria-label="Quantità"
-            data-ch="ring" data-f="qty" data-i="${k}">
-          <input list="units" value="${esc(g.unit)}" placeholder="Unità" aria-label="Unità"
-            data-ch="ring" data-f="unit" data-i="${k}">
+        ${g.alts.map((a, ai) => {
+          const sep = ai ? `<div class="or">oppure</div>` : "";
+          const del = g.alts.length > 1 ? `<button class="icon" data-act="rdelalt" data-i="${k}" data-a="${ai}" aria-label="Rimuovi alternativa">×</button>` : "";
+          const at = `data-ch="ring" data-i="${k}" data-a="${ai}"`;
+          return `${sep}<div class="item">
+            <input class="food" autocomplete="off" value="${esc(a.food)}" placeholder="Alimento" aria-label="Alimento"
+              data-f="food" ${at}>
+            ${del}
+            <input type="number" min="0" step="any" value="${esc(a.qty ?? "")}" placeholder="Quantità" aria-label="Quantità"
+              data-f="qty" ${at}>
+            <input list="units" value="${esc(a.unit)}" placeholder="Unità" aria-label="Unità"
+              data-f="unit" ${at}>
+          </div>`;
+        }).join("")}
+        <div class="row">
+          <button data-act="raddalt" data-i="${k}">+ OPPURE</button>
+          <button class="danger" data-act="rdelingr" data-i="${k}">Rimuovi ingrediente</button>
         </div>
-        <button class="danger" data-act="rdelingr" data-i="${k}">Rimuovi ingrediente</button>
       </div>`).join("");
     return `${picker}
       <label class="sub-row">Nome <input value="${esc(r.name)}" data-ch="rfield" data-f="name"></label>
@@ -1177,15 +1218,16 @@ class SharedDietPanel extends HTMLElement {
     if (!r) return `<div class="item"><span class="recipe-line"><strong>Ricetta mancante</strong></span>${del}</div>
       <div class="row"><button data-act="ualt" ${loc}>Usa alimento semplice</button></div>`;
     const overrides = this._draft.recipe_qty?.[rid] ?? {};
-    const ings = r.ingredients.map((g) => {
-      const custom = Object.hasOwn(overrides, g.id);
-      return `<div class="ing">
-          <span>${esc(g.food)}${g.unit ? ` · ${esc(g.unit)}` : ""}</span>
-          <input type="number" min="0" step="any" value="${custom ? esc(overrides[g.id]) : ""}" placeholder="${esc(g.qty ?? "q.b.")}"
-            aria-label="Quantità di ${esc(g.food)}" data-ch="rqty" data-rid="${esc(rid)}" data-iid="${esc(g.id)}">
-          <button data-act="rreset" data-rid="${esc(rid)}" data-iid="${esc(g.id)}"${custom ? "" : " hidden"}>Ripristina default</button>
+    // Grams are per alternative (keyed by alt id): each alternative of an ingredient gets its own field.
+    const ings = r.ingredients.map((g) => g.alts.map((a, k) => {
+      const custom = Object.hasOwn(overrides, a.id);
+      return `${k ? `<div class="or">oppure</div>` : ""}<div class="ing">
+          <span>${esc(a.food)}${a.unit ? ` · ${esc(a.unit)}` : ""}</span>
+          <input type="number" min="0" step="any" value="${custom ? esc(overrides[a.id]) : ""}" placeholder="${esc(a.qty ?? "q.b.")}"
+            aria-label="Quantità di ${esc(a.food)}" data-ch="rqty" data-rid="${esc(rid)}" data-iid="${esc(a.id)}">
+          <button data-act="rreset" data-rid="${esc(rid)}" data-iid="${esc(a.id)}"${custom ? "" : " hidden"}>Ripristina default</button>
         </div>`;
-    }).join("");
+    }).join("")).join("");
     return `<div class="item"><span class="recipe-line"><strong>${esc(r.name)}</strong><span class="tag">Ricetta</span></span>${del}</div>
       <p class="muted">Vale per tutti i pasti di ${esc(this._draft.name)}</p>
       ${ings || `<p class="muted">Nessun ingrediente.</p>`}

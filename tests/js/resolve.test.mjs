@@ -9,23 +9,24 @@ const ctx = {
   // The panel constructor calls attachShadow(); a plain stub is enough for rendering helpers.
   HTMLElement: class { attachShadow() { this.shadowRoot = { addEventListener() {} }; } },
   customElements: { get: () => undefined, define() {} },
+  crypto: globalThis.crypto, // uid() in the panel
 };
 vm.createContext(ctx);
 const { expandItem, fmtItem, resolveMeal, cleanProfile, cleanRecipe, setRecipeQty, matchRecipes, SharedDietPanel } = vm.runInContext(
   `${readFileSync(panel, "utf8")}\n;({ expandItem, fmtItem, resolveMeal, cleanProfile, cleanRecipe, setRecipeQty, matchRecipes, SharedDietPanel });`, ctx);
-// Recipe draft cleaning: trims, drops ingredients without food, keeps rev, rejects negative quantities.
+// Recipe draft cleaning: trims, drops alternatives without food and ingredients left without any, keeps ids and rev, rejects negative quantities.
 {
   const cleaned = cleanRecipe({ id: "r1", name: "  Pancake ", note: " Mescolare ", rev: 3, ingredients: [
-    { id: "i1", food: " Farina ", qty: 60, unit: " g " },
-    { id: "i2", food: "  ", qty: 1, unit: "pz" },
-    { id: "i3", food: "Uova", qty: null, unit: "" },
+    { id: "i1", alts: [{ id: "a1", food: " Farina ", qty: 60, unit: " g " }, { id: "a9", food: "  ", qty: 1, unit: "pz" }] },
+    { id: "i2", alts: [{ id: "a2", food: "  ", qty: 1, unit: "pz" }] },
+    { id: "i3", alts: [{ id: "a3", food: "Uova", qty: null, unit: "" }] },
   ] });
   assert.deepEqual(JSON.parse(JSON.stringify(cleaned)), { id: "r1", name: "Pancake", note: "Mescolare", rev: 3, ingredients: [
-    { id: "i1", food: "Farina", qty: 60, unit: "g" },
-    { id: "i3", food: "Uova", qty: null, unit: "" },
+    { id: "i1", alts: [{ id: "a1", food: "Farina", qty: 60, unit: "g" }] },
+    { id: "i3", alts: [{ id: "a3", food: "Uova", qty: null, unit: "" }] },
   ] });
   assert.throws(() => cleanRecipe({ id: "r1", name: " ", note: "", rev: 1, ingredients: [] }), /obbligatorio/);
-  assert.throws(() => cleanRecipe({ id: "r1", name: "X", note: "", rev: 1, ingredients: [{ id: "i", food: "Sale", qty: -1, unit: "g" }] }), /negativa/);
+  assert.throws(() => cleanRecipe({ id: "r1", name: "X", note: "", rev: 1, ingredients: [{ id: "i", alts: [{ id: "a", food: "Sale", qty: -1, unit: "g" }] }] }), /negativa/);
 }
 
 const plain = (v) => JSON.parse(JSON.stringify(v));
@@ -33,9 +34,16 @@ const RECIPES = {
   r1: {
     id: "r1", name: "Pancake", note: "Mescolare", rev: 1,
     ingredients: [
-      { id: "i1", food: "Farina", qty: 60, unit: "g" },
-      { id: "i2", food: "Uova", qty: 1, unit: "pz" },
-      { id: "i3", food: "Sale", qty: null, unit: "g" },
+      { id: "i1", alts: [{ id: "a1", food: "Farina", qty: 60, unit: "g" }] },
+      { id: "i2", alts: [{ id: "a2", food: "Uova", qty: 1, unit: "pz" }] },
+      { id: "i3", alts: [{ id: "a3", food: "Sale", qty: null, unit: "g" }] },
+    ],
+  },
+  r2: {
+    id: "r2", name: "Cappuccino", note: "", rev: 1,
+    ingredients: [
+      { id: "i4", alts: [{ id: "a4", food: "Latte", qty: 100, unit: "ml" }, { id: "a5", food: "Soia", qty: 120, unit: "ml" }] },
+      { id: "i5", alts: [{ id: "a6", food: "Caffè", qty: null, unit: "" }] },
     ],
   },
 };
@@ -49,14 +57,14 @@ const RECIPES = {
   assert.deepStrictEqual(e.ingredients.map((i) => i.qty), [60, 1, null]);
 }
 {
-  const p = { recipe_qty: { r1: { i1: 40, i3: 2 } } };
+  const p = { recipe_qty: { r1: { a1: 40, a3: 2 } } };
   const e = plain(expandItem({ recipe: "r1" }, p, RECIPES));
   assert.deepStrictEqual(e.ingredients.map((i) => i.qty), [40, 1, 2]);
   assert.deepStrictEqual(e.ingredients.map((i) => i.unit), ["g", "pz", "g"]);
 }
 {
   const e = plain(expandItem({ recipe: "nope" }, {}, RECIPES));
-  assert.deepStrictEqual(e, { recipe: "nope", food: "Ricetta mancante", note: "", ingredients: [], missing: true });
+  assert.deepStrictEqual(e, { recipe: "nope", food: "Ricetta mancante", note: "", ingredients: [], missing: true, choices: [] });
 }
 
 // fmtItem mirrors format_item.
@@ -71,7 +79,7 @@ const RECIPES = {
 // resolveMeal expands recipe alternatives with the profile and recipes.
 {
   const meal = { id: "m1", name: "Colazione", time: "08:00", options: [[{ alts: [{ recipe: "r1" }, { food: "Latte", qty: 200, unit: "ml", note: "" }] }]] };
-  const r = plain(resolveMeal(meal, { option: 0, lines: {} }, { recipe_qty: { r1: { i1: 40 } } }, RECIPES));
+  const r = plain(resolveMeal(meal, { option: 0, lines: {} }, { recipe_qty: { r1: { a1: 40 } } }, RECIPES));
   assert.equal(r.items[0].food, "Pancake");
   assert.equal(r.items[0].ingredients[0].qty, 40);
   const alt = plain(resolveMeal(meal, { option: 0, lines: { 0: 1 } }, {}, RECIPES));
@@ -131,11 +139,11 @@ const RECIPES = {
     week: { 0: [{ id: "m1", name: "Colazione", time: null, options: [[{ alts: [{ recipe: "r1" }, { food: "  ", qty: null, unit: "g", note: "" }] }]] }],
       1: [], 2: [], 3: [], 4: [], 5: [], 6: [] },
     exceptions: {}, choices: { defaults: {}, dates: {} }, rev: 3,
-    recipe_qty: { r1: { i1: 80 } },
+    recipe_qty: { r1: { a1: 80 } },
   };
   const c = plain(cleanProfile(draft));
   assert.deepStrictEqual(c.week[0][0].options, [[{ alts: [{ recipe: "r1" }] }]]);
-  assert.deepStrictEqual(c.recipe_qty, { r1: { i1: 80 } });
+  assert.deepStrictEqual(c.recipe_qty, { r1: { a1: 80 } });
   assert.deepStrictEqual(plain(cleanProfile({ ...draft, recipe_qty: undefined })).recipe_qty, {});
   assert.throws(() => cleanProfile({ ...draft, recipe_qty: { r1: { i1: -1 } } }), /negativa/);
 }
@@ -166,7 +174,7 @@ const RECIPES = {
   const recipeMeal = { id: "m1", name: "Colazione", time: "08:00", options: [[{ alts: [{ recipe: "r1" }, { food: "Latte", qty: 200, unit: "ml", note: "" }] }]] };
   const week = {}; for (let d = 0; d < 7; d++) week[d] = [recipeMeal];
   const profile = { id: "p1", name: "Luca", person: null, reminder: { enabled: false, minutes: 15, notify: null },
-    week, exceptions: {}, choices: { defaults: {}, dates: {} }, rev: 1, recipe_qty: { r1: { i1: 40 } } };
+    week, exceptions: {}, choices: { defaults: {}, dates: {} }, rev: 1, recipe_qty: { r1: { a1: 40 } } };
   const panelEl = new SharedDietPanel();
   panelEl._recipes = RECIPES;
   panelEl._profiles = { p1: profile };
@@ -232,6 +240,131 @@ const RECIPES = {
   p._draft.week[p._wday] = [{ ...meal, options: [[{ alts: [{ recipe: "r1" }] }]] }];
   assert.match(p._body(), /Vale per tutti i pasti di &lt;i&gt;Luca&lt;\/i&gt;/);
   assert.match(p._body(), /data-act="rreset"[^>]* hidden>/); // no override: the reset button is there but hidden
+}
+
+// Alternatives (mirror of model.py expand_item): chosen alt per ingredient, fallback to the first, grams per alt, choices for 2+ alts.
+{
+  const e = plain(expandItem({ recipe: "r2" }, {}, RECIPES));
+  assert.equal(fmtItem(e), "Cappuccino: Latte 100 ml, Caffè");
+  assert.deepStrictEqual(e.choices, [{ ingredient_id: "i4", alts: [
+    { id: "a4", food: "Latte", qty: 100, unit: "ml" }, { id: "a5", food: "Soia", qty: 120, unit: "ml" }], chosen: "a4" }]);
+}
+{
+  const e = plain(expandItem({ recipe: "r2" }, {}, RECIPES, { i4: "a5" }));
+  assert.equal(fmtItem(e), "Cappuccino: Soia 120 ml, Caffè");
+  assert.equal(e.choices[0].chosen, "a5");
+  assert.equal(fmtItem(expandItem({ recipe: "r2" }, {}, RECIPES, { i4: "nope" })), "Cappuccino: Latte 100 ml, Caffè");
+}
+{
+  // Overrides are keyed by alt id and apply to the chosen alt only; choices carry each alt's own grams.
+  const p = { recipe_qty: { r2: { a5: 90 } } };
+  const e = plain(expandItem({ recipe: "r2" }, p, RECIPES, { i4: "a5" }));
+  assert.equal(fmtItem(e), "Cappuccino: Soia 90 ml, Caffè");
+  assert.deepStrictEqual(e.choices[0].alts.map((a) => a.qty), [100, 90]);
+  assert.equal(expandItem({ recipe: "r2" }, p, RECIPES, { i4: "a4" }).ingredients[0].qty, 100);
+}
+{
+  // resolveMeal hands each recipe its own choice map; another recipe's choices are ignored.
+  const meal = { id: "m2", name: "Caffè", time: null, options: [[{ alts: [{ recipe: "r2" }] }]] };
+  const pick = (choice) => fmtItem(plain(resolveMeal(meal, choice, {}, RECIPES)).items[0]);
+  assert.equal(pick({ option: 0, lines: {}, recipes: { r2: { i4: "a5" } } }), "Cappuccino: Soia 120 ml, Caffè");
+  assert.equal(pick({ option: 0, lines: {}, recipes: { r1: { i4: "a5" } } }), "Cappuccino: Latte 100 ml, Caffè");
+  assert.equal(pick({ option: 0, lines: {} }), "Cappuccino: Latte 100 ml, Caffè");
+}
+{
+  // cleanRecipe: drops alts with no food, ingredients left without alts; keeps ids.
+  const cleaned = plain(cleanRecipe({ id: "r1", name: "Caffè", note: "", rev: 2, ingredients: [
+    { id: "i1", alts: [
+      { id: "a1", food: " Latte ", qty: 100, unit: " ml " },
+      { id: "a2", food: "  ", qty: null, unit: "ml" },
+      { id: "a3", food: "Soia", qty: null, unit: "" },
+    ] },
+    { id: "i2", alts: [{ id: "a4", food: " ", qty: 1, unit: "pz" }] },
+    { id: "i3", alts: [{ id: "a5", food: "Zucchero", qty: null, unit: "g" }] },
+  ] }));
+  assert.deepStrictEqual(cleaned.ingredients, [
+    { id: "i1", alts: [{ id: "a1", food: "Latte", qty: 100, unit: "ml" }, { id: "a3", food: "Soia", qty: null, unit: "" }] },
+    { id: "i3", alts: [{ id: "a5", food: "Zucchero", qty: null, unit: "g" }] },
+  ]);
+}
+{
+  // Ricette tab: each ingredient lists its alternatives with "oppure" between them; "+ OPPURE" adds an alt and focuses it; × removes one.
+  const p = new SharedDietPanel();
+  p._render = () => {};
+  p._profiles = {};
+  p._recipes = RECIPES;
+  p._recipeId = "r2";
+  p._recipeDraft = plain(RECIPES.r2);
+  p._view = "recipes";
+  const html = p._body();
+  assert.equal(html.match(/class="food"[^>]*data-i="\d" data-a="\d"/g).length, 3); // one food field per alternative
+  assert.equal(html.match(/data-act="raddalt"/g).length, 2);
+  assert.equal(html.match(/data-act="rdelalt"/g).length, 2); // × only where there is more than one alternative
+  assert.equal(html.match(/<div class="or">oppure<\/div>/g).length, 1);
+  assert.doesNotMatch(html, /undefined|NaN/);
+
+  p.shadowRoot = { getElementById: () => null, querySelector: () => null, addEventListener() {} };
+  p._onClick({ target: { closest: () => ({ dataset: { act: "raddalt", i: "1" } }) } });
+  const added = p._recipeDraft.ingredients[1].alts;
+  assert.equal(added.length, 2);
+  assert.equal(added[1].food, "");
+  assert.equal(typeof added[1].id, "string");
+  assert.notEqual(added[1].id, added[0].id);
+  assert.equal(p._focus, '[data-ch="ring"][data-f="food"][data-i="1"][data-a="1"]');
+  assert.equal(p._recipeDirty, true);
+
+  p._onChange({ target: { value: "Zucchero", type: "text", dataset: { ch: "ring", f: "food", i: "1", a: "1" } } });
+  assert.equal(p._recipeDraft.ingredients[1].alts[1].food, "Zucchero");
+  assert.equal(p._recipeDraft.ingredients[1].alts[0].food, "Caffè");
+
+  p._onClick({ target: { closest: () => ({ dataset: { act: "rdelalt", i: "0", a: "1" } }) } });
+  assert.deepStrictEqual(p._recipeDraft.ingredients[0].alts.map((a) => a.food), ["Latte"]);
+
+  p._onClick({ target: { closest: () => ({ dataset: { act: "raddingr" } }) } });
+  assert.equal(p._recipeDraft.ingredients.at(-1).alts.length, 1);
+  assert.equal(p._focus, '[data-ch="ring"][data-f="food"][data-i="2"][data-a="0"]');
+}
+{
+  // Recipe row in a meal: every alternative of an ingredient has its own grams field (data-iid = alt id) and reset button.
+  const meal = { id: "m2", name: "Caffè", time: "08:00", options: [[{ alts: [{ recipe: "r2" }] }]] };
+  const week = {}; for (let d = 0; d < 7; d++) week[d] = [meal];
+  const profile = { id: "p1", name: "Luca", person: null, reminder: { enabled: false, minutes: 15, notify: null },
+    week, exceptions: {}, choices: { defaults: {}, dates: {} }, rev: 1, recipe_qty: { r2: { a5: 90 } } };
+  const p = new SharedDietPanel();
+  p._recipes = RECIPES;
+  p._profiles = { p1: profile };
+  p._profileId = "p1";
+  p._draft = plain(profile);
+  p._view = "week";
+  p._foldToggled.add(`w${p._wday}:m2`);
+  const body = p._body();
+  assert.match(body, /Latte · ml/);
+  assert.match(body, /Soia · ml/);
+  assert.match(body, /data-rid="r2" data-iid="a4"/);
+  assert.match(body, /value="90"[^>]*data-iid="a5"/);
+  assert.match(body, /<div class="or">oppure<\/div>/);
+  assert.doesNotMatch(body, /undefined|NaN/);
+}
+{
+  // Oggi: the chosen alternative is shown; "Vedi alternative" adds the other alternatives in grey.
+  const meal = { id: "m2", name: "Caffè", time: "08:00", options: [[{ alts: [{ recipe: "r2" }] }]] };
+  const week = {}; for (let d = 0; d < 7; d++) week[d] = [meal];
+  const profile = { id: "p1", name: "Luca", person: null, reminder: { enabled: false, minutes: 15, notify: null },
+    week, exceptions: {}, choices: { defaults: {}, dates: {} }, rev: 1, recipe_qty: { r2: { a5: 90 } } };
+  const p = new SharedDietPanel();
+  p._recipes = RECIPES;
+  const today = new Date(); const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  assert.match(p._resolved(profile, iso), /Latte 100 ml/);
+  assert.doesNotMatch(p._resolved(profile, iso), /Alternativa a/);
+  const withChoice = { ...profile, choices: { defaults: { m2: { option: 0, lines: {}, recipes: { r2: { i4: "a5" } } } }, dates: {} } };
+  assert.match(p._resolved(withChoice, iso), /Soia 90 ml/);
+  assert.match(p._resolved(withChoice, iso, true), /<li class="muted">Alternativa a Soia: Latte 100 ml<\/li>/);
+}
+{
+  // Food suggestions include the alternatives of recipe ingredients.
+  const p = new SharedDietPanel();
+  p._recipes = RECIPES;
+  assert.ok(p._foodNames().has("latte") && p._foodNames().has("soia"));
 }
 
 console.log("resolve.test.mjs: all assertions passed");
