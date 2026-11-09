@@ -11,20 +11,29 @@ def fold_name(s: str) -> str:
     return " ".join(plain.casefold().split())
 
 
-def expand_item(item: dict, profile: dict, recipes: dict) -> dict:
-    """Simple items unchanged; recipe items expanded with profile grams overriding defaults."""
+def expand_item(item: dict, profile: dict, recipes: dict, recipe_choice: dict | None = None) -> dict:
+    """Simple items unchanged; recipe items expanded to the chosen alternative per ingredient, grams from profile overrides."""
     if "recipe" not in item:
         return item
     rid = item["recipe"]
     recipe = recipes.get(rid)
     if recipe is None:
-        return {"recipe": rid, "food": "Ricetta mancante", "note": "", "ingredients": [], "missing": True}
+        return {"recipe": rid, "food": "Ricetta mancante", "note": "", "ingredients": [], "missing": True, "choices": []}
     overrides = profile.get("recipe_qty", {}).get(rid, {})
-    ingredients = [
-        {"food": i["food"], "qty": overrides.get(i["id"], i["qty"]), "unit": i["unit"], "note": ""}
-        for i in recipe["ingredients"]
-    ]
-    return {"recipe": rid, "food": recipe["name"], "note": recipe["note"], "ingredients": ingredients, "missing": False}
+    chosen_ids = recipe_choice or {}
+    ingredients = []
+    choices = []
+    for ing in recipe["ingredients"]:
+        alts = ing["alts"]
+        alt = next((a for a in alts if a["id"] == chosen_ids.get(ing["id"])), alts[0])
+        ingredients.append({"food": alt["food"], "qty": overrides.get(alt["id"], alt["qty"]), "unit": alt["unit"], "note": ""})
+        if len(alts) >= 2:
+            choices.append({
+                "ingredient_id": ing["id"],
+                "alts": [{"id": a["id"], "food": a["food"], "qty": overrides.get(a["id"], a["qty"]), "unit": a["unit"]} for a in alts],
+                "chosen": alt["id"],
+            })
+    return {"recipe": rid, "food": recipe["name"], "note": recipe["note"], "ingredients": ingredients, "missing": False, "choices": choices}
 
 
 def effective_day(profile: dict, day: date) -> list[dict]:
@@ -54,7 +63,9 @@ def resolve_meal(meal: dict, choice: dict, profile: dict | None = None, recipes:
         alt = choice["lines"].get(str(i), 0)
         if not 0 <= alt < len(line["alts"]):
             alt = 0
-        items.append(expand_item(line["alts"][alt], profile or {}, recipes or {}))
+        picked = line["alts"][alt]
+        recipe_choice = choice.get("recipes", {}).get(picked.get("recipe"), {})
+        items.append(expand_item(picked, profile or {}, recipes or {}, recipe_choice))
     return {
         "id": meal["id"],
         "name": meal["name"],
