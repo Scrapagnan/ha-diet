@@ -11,8 +11,22 @@ const ctx = {
   customElements: { get: () => undefined, define() {} },
 };
 vm.createContext(ctx);
-const { expandItem, fmtItem, resolveMeal, cleanProfile, SharedDietPanel } = vm.runInContext(
-  `${readFileSync(panel, "utf8")}\n;({ expandItem, fmtItem, resolveMeal, cleanProfile, SharedDietPanel });`, ctx);
+const { expandItem, fmtItem, resolveMeal, cleanProfile, cleanRecipe, SharedDietPanel } = vm.runInContext(
+  `${readFileSync(panel, "utf8")}\n;({ expandItem, fmtItem, resolveMeal, cleanProfile, cleanRecipe, SharedDietPanel });`, ctx);
+// Recipe draft cleaning: trims, drops ingredients without food, keeps rev, rejects negative quantities.
+{
+  const cleaned = cleanRecipe({ id: "r1", name: "  Pancake ", note: " Mescolare ", rev: 3, ingredients: [
+    { id: "i1", food: " Farina ", qty: 60, unit: " g " },
+    { id: "i2", food: "  ", qty: 1, unit: "pz" },
+    { id: "i3", food: "Uova", qty: null, unit: "" },
+  ] });
+  assert.deepEqual(JSON.parse(JSON.stringify(cleaned)), { id: "r1", name: "Pancake", note: "Mescolare", rev: 3, ingredients: [
+    { id: "i1", food: "Farina", qty: 60, unit: "g" },
+    { id: "i3", food: "Uova", qty: null, unit: "" },
+  ] });
+  assert.throws(() => cleanRecipe({ id: "r1", name: " ", note: "", rev: 1, ingredients: [] }), /obbligatorio/);
+  assert.throws(() => cleanRecipe({ id: "r1", name: "X", note: "", rev: 1, ingredients: [{ id: "i", food: "Sale", qty: -1, unit: "g" }] }), /negativa/);
+}
 
 const plain = (v) => JSON.parse(JSON.stringify(v));
 const RECIPES = {

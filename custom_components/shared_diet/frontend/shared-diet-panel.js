@@ -2,7 +2,7 @@
 
 const TABS = [
   ["today", "Oggi"], ["week", "Settimana"], ["dates", "Date"],
-  ["choices", "Scelte"], ["shop", "Spesa"], ["profiles", "Profili"],
+  ["choices", "Scelte"], ["recipes", "Ricette"], ["shop", "Spesa"], ["profiles", "Profili"],
 ];
 const DAYS = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato", "Domenica"];
 const DAYS_SHORT = ["Lun", "Mar", "Mer", "Gio", "Ven", "Sab", "Dom"];
@@ -62,6 +62,9 @@ input, select { padding: 6px 8px; min-width: 0; max-width: 100%; border: 1px sol
 .item .food { grid-column: 1 / 4; }
 .item [data-f="qty"] { grid-column: 1; } /* always start a new row, with or without the × button */
 .item .recipe-line { grid-column: 1 / 4; }
+.recipe-row { width: 100%; text-align: left; }
+textarea { font: inherit; font-size: 16px; color: inherit; width: 100%; padding: 6px 8px; border: 1px solid var(--divider-color, #e0e0e0);
+  border-radius: 6px; background: var(--card-background-color, #fff); }
 details p { white-space: pre-line; margin: 6px 0; }
 .or { font-size: 12px; font-weight: 600; text-align: center; color: var(--secondary-text-color, #727272); }
 .chips { display: flex; gap: 4px; }
@@ -219,6 +222,20 @@ function mergeProfiles(base, mine, theirs) {
   return { merged, overlaps };
 }
 
+// Cleans a recipe draft before saving: trims, drops ingredients without food. Mirrors cleanProfile.
+function cleanRecipe(r) {
+  const name = r.name.trim();
+  if (!name) throw new Error("Il nome della ricetta è obbligatorio");
+  return {
+    id: r.id, name, note: r.note.trim(),
+    ingredients: r.ingredients.filter((i) => i.food.trim()).map((i) => {
+      if (i.qty < 0) throw new Error("La quantità non può essere negativa");
+      return { id: i.id, food: i.food.trim(), qty: Number.isFinite(i.qty) ? i.qty : null, unit: i.unit.trim() };
+    }),
+    rev: r.rev,
+  };
+}
+
 class SharedDietPanel extends HTMLElement {
   constructor() {
     super();
@@ -233,6 +250,10 @@ class SharedDietPanel extends HTMLElement {
     this._base = null; // server copy the draft was taken from: the "original" for three-way merges
     this._dirty = false;
     this._newName = ""; // new-profile name, kept across re-renders
+    this._recipeId = null; // selected recipe; its draft and dirty flag are separate from the profile's
+    this._recipeDraft = null;
+    this._recipeDirty = false;
+    this._newRecipe = ""; // new-recipe name, kept across re-renders
     // "ctx:mealId" of meals whose fold state differs from the default (Settimana: folded, Date: open). View-only.
     this._foldToggled = new Set();
     this._busy = false;
@@ -255,13 +276,19 @@ class SharedDietPanel extends HTMLElement {
   _foodNames() {
     const profiles = [...Object.values(this._profiles ?? {}), ...(this._draft ? [this._draft] : [])];
     const names = new Map();
+    const add = (food) => {
+      const name = food.trim().replace(/\s+/g, " ");
+      if (name && !names.has(foldText(name))) names.set(foldText(name), name);
+    };
     for (const p of profiles)
       for (const m of [...Object.values(p.week).flat(), ...Object.values(p.exceptions).flat()])
         for (const a of m.options.flat().flatMap((l) => l.alts)) {
           if ("recipe" in a) continue; // recipe names are not food names
-          const name = a.food.trim().replace(/\s+/g, " ");
-          if (name && !names.has(foldText(name))) names.set(foldText(name), name);
+          add(a.food);
         }
+    // Recipe ingredients are foods too.
+    for (const r of [...Object.values(this._recipes), ...(this._recipeDraft ? [this._recipeDraft] : [])])
+      for (const i of r.ingredients) add(i.food);
     return names;
   }
 
@@ -336,8 +363,12 @@ class SharedDietPanel extends HTMLElement {
       this._dirty = false;
     }
     if (this._profileId && !this._dirty) this._load(profiles[this._profileId]);
+    this._syncRecipe();
     // A dirty editor is only annotated: re-rendering it would drop focus and the caret mid-typing.
-    if (this._dirty && ["week", "dates", "choices", "profiles"].includes(this._view)) {
+    const editing = this._view === "recipes"
+      ? this._recipeDirty
+      : this._dirty && ["week", "dates", "choices", "profiles"].includes(this._view);
+    if (editing) {
       const el = this.shadowRoot.getElementById("notice");
       if (el) {
         el.innerHTML = this._noticeHtml();
@@ -351,6 +382,25 @@ class SharedDietPanel extends HTMLElement {
     this._draft = clone(profile);
     this._base = clone(profile);
     this._dirty = false;
+  }
+
+  // Keeps the selected recipe in step with the server: unsaved edits survive, a deleted recipe clears the selection.
+  _syncRecipe() {
+    if (!this._recipeId) return;
+    const r = this._recipes[this._recipeId];
+    if (!r) this._clearRecipe();
+    else if (!this._recipeDirty) this._loadRecipe(r);
+  }
+
+  _loadRecipe(r) {
+    this._recipeDraft = clone(r);
+    this._recipeDirty = false;
+  }
+
+  _clearRecipe() {
+    this._recipeId = null;
+    this._recipeDraft = null;
+    this._recipeDirty = false;
   }
 
   _noticeHtml() {
@@ -377,6 +427,30 @@ class SharedDietPanel extends HTMLElement {
   _edit() {
     this._dirty = true;
     this._render();
+  }
+
+  _canDiscardRecipe() {
+    return !this._recipeDirty || confirm("Ci sono modifiche non salvate: scartarle?");
+  }
+
+  _selectRecipe(id) {
+    if (id === this._recipeId) return;
+    if (!this._canDiscardRecipe()) return this._render();
+    if (id && this._recipes[id]) {
+      this._recipeId = id;
+      this._loadRecipe(this._recipes[id]);
+    } else this._clearRecipe();
+    this._render();
+  }
+
+  _recipeEdit() {
+    this._recipeDirty = true;
+    this._render();
+  }
+
+  _markRecipeDirty() {
+    this._recipeDirty = true;
+    this.shadowRoot.getElementById("rsave")?.removeAttribute("hidden"); // no re-render while typing
   }
 
   _markDirty() {
@@ -478,6 +552,44 @@ class SharedDietPanel extends HTMLElement {
     }, "Profilo eliminato");
   }
 
+  _saveRecipe() {
+    const id = this._recipeId;
+    return this._run(async () => {
+      const recipe = cleanRecipe(this._recipeDraft);
+      try {
+        const res = await this._hass.callWS({ type: "shared_diet/save_recipe", recipe });
+        this._loadRecipe(res.recipe);
+      } catch (err) {
+        if (err?.code !== "conflict") throw err;
+        // Someone else changed it: take the latest server copy and say so.
+        if (this._recipes[id]) this._loadRecipe(this._recipes[id]);
+        else this._clearRecipe();
+        throw new Error("Ricetta modificata da un altro utente, dati ricaricati");
+      }
+    }, "Ricetta salvata");
+  }
+
+  _createRecipe() {
+    const name = this._newRecipe.trim();
+    if (!name) return this._flash("Inserisci un nome per la ricetta");
+    if (!this._canDiscardRecipe()) return;
+    return this._run(async () => {
+      const res = await this._hass.callWS({ type: "shared_diet/create_recipe", name });
+      this._recipeId = res.recipe.id;
+      this._loadRecipe(res.recipe);
+      this._newRecipe = "";
+    }, "Ricetta creata");
+  }
+
+  _deleteRecipe() {
+    const id = this._recipeId;
+    if (!confirm("Eliminare la ricetta?")) return;
+    return this._run(async () => {
+      await this._hass.callWS({ type: "shared_diet/delete_recipe", recipe_id: id });
+      if (this._recipeId === id) this._clearRecipe();
+    }, "Ricetta eliminata");
+  }
+
   _todo() {
     const todos = Object.keys(this._hass.states).filter((e) => e.startsWith("todo."));
     return todos.includes(this._shop.todo) ? this._shop.todo : todos[0] ?? "";
@@ -538,6 +650,17 @@ class SharedDietPanel extends HTMLElement {
       case "save": return this._save();
       case "create": return this._createProfile();
       case "delprofile": return this._deleteProfile();
+      case "rcreate": return this._createRecipe();
+      case "rsave": return this._saveRecipe();
+      case "rdelete": return this._deleteRecipe();
+      case "ropen": return this._selectRecipe(d.rid);
+      case "raddingr":
+        this._recipeDraft.ingredients.push({ id: uid(), food: "", qty: null, unit: "g" });
+        this._focus = `[data-ch="ring"][data-f="food"][data-i="${this._recipeDraft.ingredients.length - 1}"]`;
+        return this._recipeEdit();
+      case "rdelingr":
+        this._recipeDraft.ingredients.splice(Number(d.i), 1);
+        return this._recipeEdit();
       case "shop": return this._runShop();
       case "alts": this._showAlts = !this._showAlts; return this._render();
       case "wday": this._wday = Number(d.d); return this._render();
@@ -616,9 +739,10 @@ class SharedDietPanel extends HTMLElement {
   // Typing updates the draft without re-rendering, so a push from another user cannot wipe it.
   _onInput(e) {
     const el = e.target;
-    if (this._busy || el.tagName !== "INPUT") return;
+    if (this._busy || !["INPUT", "TEXTAREA"].includes(el.tagName)) return;
     if ("newname" in el.dataset) this._newName = el.value;
-    else if (["pfield", "meal", "item"].includes(el.dataset.ch) && el.type !== "checkbox") this._onChange(e);
+    else if ("newrecipe" in el.dataset) this._newRecipe = el.value;
+    else if (["pfield", "meal", "item", "rfield", "ring"].includes(el.dataset.ch) && el.type !== "checkbox") this._onChange(e);
     if (el.classList.contains("food")) this._suggest(el);
   }
 
@@ -638,6 +762,15 @@ class SharedDietPanel extends HTMLElement {
       case "srange":
         this._shop[d.f] = el.value;
         return this._render();
+      case "rpick": return this._selectRecipe(el.value);
+      case "rfield":
+        this._recipeDraft[d.f] = el.value; // name or note
+        return this._markRecipeDirty();
+      case "ring": {
+        const ing = this._recipeDraft.ingredients[Number(d.i)];
+        ing[d.f] = d.f === "qty" ? (el.value === "" ? null : Number(el.value)) : el.value;
+        return this._markRecipeDirty();
+      }
       case "stodo": this._shop.todo = el.value; return;
       case "sprof":
         if (el.checked) this._shop.off.delete(d.id);
@@ -704,7 +837,7 @@ class SharedDietPanel extends HTMLElement {
     if (!this._profiles) return `<p class="muted">Caricamento…</p>`;
     const views = {
       today: () => this._vToday(), week: () => this._vWeek(), dates: () => this._vDates(),
-      choices: () => this._vChoices(), shop: () => this._vShop(), profiles: () => this._vProfiles(),
+      choices: () => this._vChoices(), recipes: () => this._vRecipes(), shop: () => this._vShop(), profiles: () => this._vProfiles(),
     };
     return `<div id="notice">${this._noticeHtml()}</div>` + views[this._view]() + this._datalists();
   }
@@ -724,7 +857,10 @@ class SharedDietPanel extends HTMLElement {
 
   _datalists() {
     const meals = Object.values(this._profiles).flatMap((p) => [...Object.values(p.week).flat(), ...Object.values(p.exceptions).flat()]);
-    const items = meals.flatMap((m) => m.options.flat().flatMap((l) => l.alts)).filter((i) => !("recipe" in i));
+    const items = [
+      ...meals.flatMap((m) => m.options.flat().flatMap((l) => l.alts)).filter((i) => !("recipe" in i)),
+      ...Object.values(this._recipes).flatMap((r) => r.ingredients),
+    ];
     // Units: case-insensitive like model.py. Food suggestions use the in-panel list (_suggest): datalists are unreliable in the Companion app.
     const units = [...new Set(["g", "ml", "pz", ...items.map((i) => i.unit.trim().toLowerCase()).filter(Boolean)])];
     return `<datalist id="units">${units.map((u) => `<option value="${esc(u)}">`).join("")}</datalist>`;
@@ -859,6 +995,47 @@ class SharedDietPanel extends HTMLElement {
       ${todoSel}
       <button class="primary" data-act="shop"${todo && !this._busy ? "" : " disabled"}>Aggiungi alla lista</button>
       ${items}`;
+  }
+
+  _vRecipes() {
+    if (!this._recipeDraft) {
+      const list = Object.values(this._recipes).sort((a, b) => a.name.localeCompare(b.name, "it"));
+      const rows = list.map((r) => {
+        const n = r.ingredients.length;
+        return `<section class="card"><button class="recipe-row" data-act="ropen" data-rid="${esc(r.id)}">${esc(r.name)}
+          <span class="muted">· ${n} ${n === 1 ? "ingrediente" : "ingredienti"}</span></button></section>`;
+      }).join("");
+      return `<h2>Ricette</h2>
+        <div class="row"><input data-newrecipe value="${esc(this._newRecipe)}" placeholder="Nome della nuova ricetta" aria-label="Nome nuova ricetta">
+          <button data-act="rcreate">Crea ricetta</button></div>
+        ${rows || `<p class="muted">Nessuna ricetta ancora: creane una qui sopra.</p>`}`;
+    }
+    const r = this._recipeDraft;
+    const ids = Object.values(this._recipes).sort((a, b) => a.name.localeCompare(b.name, "it"));
+    const opts = ids.map((x) => `<option value="${esc(x.id)}"${x.id === this._recipeId ? " selected" : ""}>${esc(x.name)}</option>`).join("");
+    const picker = `<div class="savebar">
+        <label class="row">Ricetta <select data-ch="rpick"><option value="">— elenco —</option>${opts}</select></label>
+        <button class="primary" id="rsave" data-act="rsave"${this._recipeDirty ? "" : " hidden"}${this._busy ? " disabled" : ""}>Salva</button>
+      </div>`;
+    const ings = r.ingredients.map((g, k) => `<div class="line">
+        <div class="line-head">Ingrediente ${k + 1}</div>
+        <div class="item">
+          <input class="food" autocomplete="off" value="${esc(g.food)}" placeholder="Alimento" aria-label="Alimento"
+            data-ch="ring" data-f="food" data-i="${k}">
+          <input type="number" min="0" step="any" value="${esc(g.qty)}" placeholder="Quantità" aria-label="Quantità"
+            data-ch="ring" data-f="qty" data-i="${k}">
+          <input list="units" value="${esc(g.unit)}" placeholder="Unità" aria-label="Unità"
+            data-ch="ring" data-f="unit" data-i="${k}">
+        </div>
+        <button class="danger" data-act="rdelingr" data-i="${k}">Rimuovi ingrediente</button>
+      </div>`).join("");
+    return `${picker}
+      <label class="sub-row">Nome <input value="${esc(r.name)}" data-ch="rfield" data-f="name"></label>
+      <label class="sub-row">Preparazione <textarea rows="4" data-ch="rfield" data-f="note">${esc(r.note)}</textarea></label>
+      <h3>Ingredienti</h3>
+      ${ings}
+      <button class="add" data-act="raddingr">+ Ingrediente</button>
+      <button class="danger" data-act="rdelete">Elimina ricetta</button>`;
   }
 
   _vProfiles() {
