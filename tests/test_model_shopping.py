@@ -84,3 +84,13 @@ def test_uses_chosen_alternative_and_exception():
 
 def test_decimal_qty_formatting():
     assert "Olio — 7.5 ml" in shopping_items([p_olio_2_5_x3], MON, MON)
+
+
+def test_food_whitespace_collapsed_before_summing():
+    p = profile(mon=[lunch(item("Pasta  integrale", 80.0)), lunch(item("pasta integrale", 20.0))])
+    assert shopping_items([p], MON, MON) == ["Pasta integrale — 100 g"]
+
+
+def test_units_compared_case_insensitively():
+    p = profile(mon=[lunch(item("Burro", 10.0, "G"), item("Burro", 5.0, "g"))])
+    assert shopping_items([p], MON, MON) == ["Burro — 15 g"]

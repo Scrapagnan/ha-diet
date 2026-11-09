@@ -79,12 +79,12 @@ def shopping_items(profiles: list[dict], start: date, end: date) -> list[str]:
         for p in profiles:
             for meal in effective_day(p, day):
                 for item in resolve_meal(meal, choice_for(p, day, meal["id"]))["items"]:
-                    food = item["food"].strip()
+                    food = " ".join(item["food"].split())
                     norm = food.casefold()
                     if item["qty"] is None:
                         untimed.setdefault(norm, (food, item["note"].strip()))
                     else:
-                        key = (norm, item["unit"].strip())
+                        key = (norm, item["unit"].strip().casefold())
                         name, qty = totals.get(key, (food, 0.0))
                         totals[key] = (name, qty + item["qty"])
         day += timedelta(days=1)
