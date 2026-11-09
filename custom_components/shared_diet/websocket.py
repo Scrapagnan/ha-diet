@@ -56,9 +56,13 @@ def _qty(value: Any) -> float | None:
         return None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise vol.Invalid("expected number")
-    if not math.isfinite(value) or value < 0:
+    try:
+        number = float(value)  # huge ints overflow here
+    except OverflowError as err:
+        raise vol.Invalid("expected number") from err
+    if not math.isfinite(number) or number < 0:
         raise vol.Invalid("expected number >= 0")
-    return float(value)
+    return number
 
 
 NON_EMPTY = vol.All(str, vol.Length(min=1))

@@ -3,6 +3,7 @@
 from datetime import date, timedelta
 
 import pytest
+import voluptuous as vol
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
@@ -10,6 +11,7 @@ from pytest_homeassistant_custom_component.common import (
 )
 
 from custom_components.shared_diet.const import DOMAIN
+from custom_components.shared_diet.websocket import _qty
 
 CLIENT_ID = "https://example.com/shared-diet-test"
 MONDAY = date(2026, 11, 9)
@@ -226,3 +228,9 @@ async def test_commands_report_not_loaded_without_entry(hass, hass_ws_client):
     client = await _non_admin_client(hass, hass_ws_client)
     resp = await call(client, "create_profile", name="X")
     assert resp["error"]["code"] == "not_loaded"
+
+
+def test_huge_int_qty_is_invalid_not_overflow():
+    # orjson rejects >64-bit ints on the wire, so this guard is only reachable directly.
+    with pytest.raises(vol.Invalid):
+        _qty(10**400)
