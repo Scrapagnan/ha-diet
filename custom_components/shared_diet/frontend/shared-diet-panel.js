@@ -91,9 +91,11 @@ const fmtDay = (s, opts) => parseIso(s).toLocaleDateString("it-IT", opts);
 const fmtItem = (it) => (!it ? "" : it.qty !== null ? `${it.food} ${it.qty} ${it.unit}` : it.note ? `${it.food} (${it.note})` : it.food);
 const blankItem = () => ({ food: "", qty: null, unit: "g", note: "" });
 const newMeal = () => ({ id: uid(), name: "Pasto", time: null, options: [[{ alts: [blankItem()] }]] });
+// Meal editor context: "w<weekday>" in Settimana, "x<ISO date>" in Date (see _list).
+const isWeekCtx = (ctx) => ctx[0] === "w";
 // Comparison key for food names: case, accents and repeated spaces ignored ("Caffè " ~ "caffe").
 const foldText = (s) => s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().trim().replace(/\s+/g, " ");
-// Selector of a food input in the meal editor (to focus a just-added field). ctx is a weekday digit or an ISO date.
+// Selector of a food input in the meal editor (to focus a just-added field).
 const foodSel = (ctx, i, o, l, a) =>
   `input.food[data-ctx="${ctx}"][data-i="${i}"][data-o="${o}"][data-l="${l}"][data-a="${a}"]`;
 const zeroChoice = () => ({ option: 0, lines: {} });
@@ -205,7 +207,8 @@ class SharedDietPanel extends HTMLElement {
     this._base = null; // server copy the draft was taken from: the "original" for three-way merges
     this._dirty = false;
     this._newName = ""; // new-profile name, kept across re-renders
-    this._collapsed = new Set(); // meal ids folded in the editors (view-only, not saved)
+    // "ctx:mealId" of meals whose fold state differs from the default (Settimana: folded, Date: open). View-only.
+    this._foldToggled = new Set();
     this._busy = false;
     this._narrow = false;
     this._showAlts = false;
@@ -496,7 +499,7 @@ class SharedDietPanel extends HTMLElement {
       return this._render();
     }
     if (d.act === "fold") {
-      if (!this._collapsed.delete(d.mid)) this._collapsed.add(d.mid);
+      if (!this._foldToggled.delete(d.key)) this._foldToggled.add(d.key);
       return this._render();
     }
     if (this._busy && d.act !== "menu") return; // nothing may change while a save is in flight
@@ -535,6 +538,7 @@ class SharedDietPanel extends HTMLElement {
     switch (d.act) {
       case "addmeal":
         list.push(newMeal());
+        if (isWeekCtx(d.ctx)) this._foldToggled.add(`${d.ctx}:${list.at(-1).id}`); // a new meal opens for filling in
         this._focus = `[data-ch="meal"][data-f="name"][data-ctx="${d.ctx}"][data-i="${list.length - 1}"]`;
         break;
       case "up":
@@ -859,11 +863,12 @@ class SharedDietPanel extends HTMLElement {
 
   _mealCard(ctx, m, i, n) {
     const at = `data-ctx="${esc(ctx)}" data-i="${i}"`;
-    const folded = this._collapsed.has(m.id);
+    const key = `${ctx}:${m.id}`;
+    const folded = isWeekCtx(ctx) !== this._foldToggled.has(key);
     const head = `<div class="row">
         <input class="grow" value="${esc(m.name)}" data-ch="meal" data-f="name" ${at} aria-label="Nome pasto">
         <input type="time" value="${esc(m.time ?? "")}" data-ch="meal" data-f="time" ${at} aria-label="Orario">
-        <button class="icon" data-act="fold" data-mid="${esc(m.id)}" aria-expanded="${!folded}"
+        <button class="icon" data-act="fold" data-key="${esc(key)}" aria-expanded="${!folded}"
           aria-label="${folded ? "Espandi pasto" : "Comprimi pasto"}">${folded ? "▸" : "▾"}</button>
       </div>`;
     if (folded) {
