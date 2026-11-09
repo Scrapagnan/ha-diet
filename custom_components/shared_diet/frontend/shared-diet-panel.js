@@ -153,7 +153,8 @@ function resolveMeal(meal, choice, profile, recipes) {
   const opt = choice.option >= 0 && choice.option < meal.options.length ? choice.option : 0;
   const items = meal.options[opt].map((line, i) => {
     const alt = choice.lines[String(i)] ?? 0;
-    return expandItem(line.alts[alt >= 0 && alt < line.alts.length ? alt : 0], profile ?? {}, recipes ?? {});
+    const a = line.alts[alt >= 0 && alt < line.alts.length ? alt : 0];
+    return a && expandItem(a, profile ?? {}, recipes ?? {});
   }).filter(Boolean); // a line emptied in the editor has no alternative to show
   return { option: opt, items };
 }
@@ -426,8 +427,11 @@ class SharedDietPanel extends HTMLElement {
   _syncRecipe() {
     if (!this._recipeId) return;
     const r = this._recipes[this._recipeId];
-    if (!r) this._clearRecipe();
-    else if (!this._recipeDirty) this._loadRecipe(r);
+    if (!r) {
+      // Our own delete also arrives as a push, before its reply: only another user's deletion warns.
+      if (this._recipeDirty && this._recipeId !== this._deletingId) this._flash("Ricetta eliminata da un altro utente: modifiche scartate");
+      this._clearRecipe();
+    } else if (!this._recipeDirty) this._loadRecipe(r);
   }
 
   _loadRecipe(r) {
@@ -489,6 +493,17 @@ class SharedDietPanel extends HTMLElement {
   _markRecipeDirty() {
     this._recipeDirty = true;
     this.shadowRoot.getElementById("rsave")?.removeAttribute("hidden"); // no re-render while typing
+  }
+
+  // The same recipe can sit in two meals: copies the grams into every row showing this ingredient, and shows its reset button only when overridden.
+  _syncRecipeQty(el, v) {
+    const { rid, iid } = el.dataset;
+    for (const input of this.shadowRoot.querySelectorAll('input[data-ch="rqty"]')) {
+      if (input.dataset.rid !== rid || input.dataset.iid !== iid) continue;
+      if (input !== el) input.value = v ?? "";
+      const reset = input.closest(".ing")?.querySelector('[data-act="rreset"]');
+      if (reset) reset.hidden = v === null;
+    }
   }
 
   _markDirty() {
@@ -623,7 +638,12 @@ class SharedDietPanel extends HTMLElement {
     const id = this._recipeId;
     if (!confirm("Eliminare la ricetta?")) return;
     return this._run(async () => {
-      await this._hass.callWS({ type: "shared_diet/delete_recipe", recipe_id: id });
+      this._deletingId = id;
+      try {
+        await this._hass.callWS({ type: "shared_diet/delete_recipe", recipe_id: id });
+      } finally {
+        this._deletingId = null;
+      }
       if (this._recipeId === id) this._clearRecipe();
     }, "Ricetta eliminata");
   }
@@ -846,6 +866,7 @@ class SharedDietPanel extends HTMLElement {
         const n = Number(el.value);
         const v = el.value === "" || !Number.isFinite(n) ? null : n; // negatives are kept, and rejected on save
         this._draft.recipe_qty = setRecipeQty(this._draft.recipe_qty ?? {}, d.rid, d.iid, v);
+        this._syncRecipeQty(el, v);
         return this._markDirty();
       }
       case "copt": {
@@ -1161,8 +1182,8 @@ class SharedDietPanel extends HTMLElement {
       return `<div class="ing">
           <span>${esc(g.food)}${g.unit ? ` · ${esc(g.unit)}` : ""}</span>
           <input type="number" min="0" step="any" value="${custom ? esc(overrides[g.id]) : ""}" placeholder="${esc(g.qty ?? "q.b.")}"
-            aria-label="Grammi di ${esc(g.food)}" data-ch="rqty" data-rid="${esc(rid)}" data-iid="${esc(g.id)}">
-          ${custom ? `<button data-act="rreset" data-rid="${esc(rid)}" data-iid="${esc(g.id)}">Ripristina default</button>` : "<span></span>"}
+            aria-label="Quantità di ${esc(g.food)}" data-ch="rqty" data-rid="${esc(rid)}" data-iid="${esc(g.id)}">
+          <button data-act="rreset" data-rid="${esc(rid)}" data-iid="${esc(g.id)}"${custom ? "" : " hidden"}>Ripristina default</button>
         </div>`;
     }).join("");
     return `<div class="item"><span class="recipe-line"><strong>${esc(r.name)}</strong><span class="tag">Ricetta</span></span>${del}</div>

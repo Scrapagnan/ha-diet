@@ -78,6 +78,52 @@ const RECIPES = {
   assert.equal(fmtItem(alt.items[0]), "Latte 200 ml");
 }
 
+// M3: a line with no alternative is dropped instead of throwing.
+{
+  const meal = { id: "m1", name: "Colazione", time: null, options: [[{ alts: [] }, { alts: [{ food: "Latte", qty: 200, unit: "ml", note: "" }] }]] };
+  const r = plain(resolveMeal(meal, { option: 0, lines: {} }, {}, RECIPES));
+  assert.deepEqual(r.items.map(fmtItem), ["Latte 200 ml"]);
+}
+
+// I1: a draft on a recipe deleted by another user is announced; our own delete (pushed before its reply) and a clean draft are not.
+{
+  const p = new SharedDietPanel();
+  const flashes = [];
+  p._flash = (t) => flashes.push(t);
+  p._recipes = {};
+  p._recipeId = "r1"; p._recipeDirty = true; p._recipeDraft = { id: "r1" };
+  p._syncRecipe();
+  assert.deepEqual(flashes, ["Ricetta eliminata da un altro utente: modifiche scartate"]);
+  assert.equal(p._recipeId, null);
+  p._recipeId = "r2"; p._recipeDirty = true; p._deletingId = "r2";
+  p._syncRecipe();
+  p._recipeId = "r3"; p._recipeDirty = false;
+  p._syncRecipe();
+  assert.equal(flashes.length, 1);
+}
+
+// I2: an edit in one meal's grams field is copied into the same ingredient elsewhere, and only its reset button is toggled.
+{
+  const fakeRow = (rid, iid) => {
+    const reset = { hidden: true };
+    const ing = { querySelector: () => reset };
+    return { dataset: { ch: "rqty", rid, iid }, value: "", closest: () => ing, reset };
+  };
+  const a = fakeRow("r1", "i1"), b = fakeRow("r1", "i1"), other = fakeRow("r1", "i2");
+  const p = new SharedDietPanel();
+  p.shadowRoot = { querySelectorAll: () => [a, b, other] };
+  a.value = "40";
+  p._syncRecipeQty(a, 40);
+  assert.equal(String(b.value), "40");
+  assert.equal(other.value, "");
+  assert.equal(a.reset.hidden, false);
+  assert.equal(b.reset.hidden, false);
+  assert.equal(other.reset.hidden, true);
+  p._syncRecipeQty(a, null);
+  assert.equal(b.value, "");
+  assert.equal(b.reset.hidden, true);
+}
+
 // cleanProfile keeps {recipe} items (drops only empty simple items) and carries recipe_qty.
 {
   const draft = {
@@ -144,8 +190,10 @@ const RECIPES = {
   // Recipe row: name, per-person grams in the input (override 40, default 60), reset button, note, simple-food button.
   assert.match(editor, /<strong>Pancake<\/strong><span class="tag">Ricetta<\/span>/);
   assert.match(editor, /value="40" placeholder="60"/);
-  assert.match(editor, /placeholder="1"\s+aria-label="Grammi di Uova"/);
-  assert.equal((editor.match(/Ripristina default/g) ?? []).length, 1);
+  assert.match(editor, /placeholder="1"\s+aria-label="Quantità di Uova"/);
+  const resetButtons = editor.match(/<button data-act="rreset"[^>]*>/g) ?? [];
+  assert.equal(resetButtons.length, 3); // one per ingredient; only the overridden one is visible
+  assert.equal(resetButtons.filter((b) => !b.includes(" hidden")).length, 1);
   assert.match(editor, /Vale per tutti i pasti di Luca/);
   assert.match(editor, /Usa alimento semplice/);
   assert.doesNotMatch(editor, /undefined|NaN/);
@@ -183,6 +231,7 @@ const RECIPES = {
   p._foldToggled.add(`w${p._wday}:m1`);
   p._draft.week[p._wday] = [{ ...meal, options: [[{ alts: [{ recipe: "r1" }] }]] }];
   assert.match(p._body(), /Vale per tutti i pasti di &lt;i&gt;Luca&lt;\/i&gt;/);
+  assert.match(p._body(), /data-act="rreset"[^>]* hidden>/); // no override: the reset button is there but hidden
 }
 
 console.log("resolve.test.mjs: all assertions passed");

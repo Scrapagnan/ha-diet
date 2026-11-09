@@ -19,6 +19,7 @@ Dopo l'installazione compare **Dieta** nella barra laterale. Le schede sono:
 - **Settimana**: pasti di ogni giorno della settimana. Aggiungi, rimuovi o riordina i pasti; ogni pasto ha opzioni (A, B, …) fatte di righe, e ogni riga può avere alternative ("OPPURE"). Il campo alimento suggerisce i nomi già usati in tutti i profili.
 - **Date**: crea un'eccezione per una data specifica (copia il giorno della settimana, mantenendo le scelte), modificala o eliminala.
 - **Scelte**: per un intervallo di date, scegli l'opzione e l'alternativa di ogni pasto. Il predefinito vale per tutte le date; "Ritocca per questa data" cambia solo quel giorno.
+- **Ricette**: il ricettario condiviso, da cui si aggiungono ricette ai pasti (vedi sotto).
 - **Spesa**: sceglie intervallo di date e profili, poi aggiunge gli alimenti alla lista To-do selezionata (quantità sommate per alimento e unità).
 - **Profili**: crea, rinomina ed elimina profili; collega una persona; configura il promemoria (minuti prima del pasto e servizio di notifica).
 
@@ -42,6 +43,8 @@ Per ogni profilo vengono creati due sensori, dove `<nome>` è il nome del profil
 - `sensor.<nome>_prossimo_pasto`: nome del prossimo pasto con orario. Stesso schema di attributi.
 
 I pasti senza orario non compaiono mai come attuali o prossimi e non generano promemoria.
+
+Se un pasto contiene una ricetta, `items` riporta una voce per ricetta nel formato `Pancake: Farina 60 g, Uova 1 pz` (nome, poi gli ingredienti con le grammature della persona). La nota di preparazione non è negli attributi del sensore: appare in **Oggi**, sotto "Preparazione".
 
 ## Esempio di automazione
 
