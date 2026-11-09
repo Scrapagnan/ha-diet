@@ -365,7 +365,9 @@ class SharedDietPanel extends HTMLElement {
     this._render();
     try {
       const done = (await fn()) || okText;
-      this._msg = done ? { ok: true, text: done } : null;
+      // Success goes to HA's own toast (auto-closing); errors stay inline at the top until the next action.
+      if (done) this.dispatchEvent(new CustomEvent("hass-notification", {
+        detail: { message: done, duration: done === okText ? 3000 : 6000 }, bubbles: true, composed: true }));
     } catch (err) {
       this._msg = { ok: false, text: err?.message || "Operazione non riuscita" };
     } finally {
