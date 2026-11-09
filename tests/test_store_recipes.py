@@ -6,6 +6,7 @@ from custom_components.shared_diet.store import (
     DietStore,
     DuplicateNameError,
     InUseError,
+    UnknownRecipeError,
 )
 
 
@@ -109,7 +110,7 @@ async def test_save_profile_with_unknown_recipe_raises_and_changes_nothing(hass)
     p = await s.async_create_profile("Luca")
     before = s.profiles[p["id"]]
     p["week"]["0"] = [_meal({"recipe": "ghost"})]
-    with pytest.raises(ValueError):
+    with pytest.raises(UnknownRecipeError):
         await s.async_save_profile(p)
     assert s.profiles[p["id"]] == before
 

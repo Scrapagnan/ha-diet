@@ -14,8 +14,8 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
 
 from .const import DOMAIN
-from .model import shopping_items
-from .store import ConflictError, DietStore, DuplicateNameError, InUseError
+from .model import fold_name, shopping_items
+from .store import ConflictError, DietStore, DuplicateNameError, InUseError, UnknownRecipeError
 
 MAX_SPAN_DAYS = 62
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}", re.ASCII)
@@ -79,6 +79,15 @@ def _nonnull_qty(value: Any) -> float:
 
 
 NON_EMPTY = vol.All(str, vol.Length(min=1))
+
+
+def _recipe_name(value: Any) -> str:
+    if not isinstance(value, str) or not fold_name(value):
+        raise vol.Invalid("expected a non-blank name")
+    return value
+
+
+RECIPE_NAME = vol.All(str, _recipe_name)
 TIME = _pattern(r"([01]\d|2[0-3]):[0-5]\d")
 PERSON = vol.Any(None, _pattern(r"person\.[a-z0-9_]+"))
 NOTIFY = vol.Any(None, _pattern(r"notify\.[a-z0-9_]+"))
@@ -99,7 +108,7 @@ INGREDIENT = {
 RECIPE_SCHEMA = vol.Schema(
     {
         vol.Required("id"): NON_EMPTY,
-        vol.Required("name"): NON_EMPTY,
+        vol.Required("name"): RECIPE_NAME,
         vol.Required("note"): str,
         vol.Required("ingredients"): vol.All([INGREDIENT], _unique_ids),
         vol.Required("rev"): _int(1),
@@ -192,8 +201,12 @@ async def ws_save_profile(hass: HomeAssistant, connection: websocket_api.ActiveC
     except KeyError:
         connection.send_error(msg["id"], "not_found", "Profilo non trovato")
         return
-    except ValueError:
-        connection.send_error(msg["id"], "invalid_format", "Riferimento a ricetta non valido")
+    except UnknownRecipeError:
+        connection.send_error(
+            msg["id"],
+            "invalid_format",
+            "Una ricetta del pasto è stata eliminata: usa «Usa alimento semplice»",
+        )
         return
     except ConflictError:
         connection.send_error(msg["id"], "conflict", "Profilo modificato da un altro utente")
@@ -214,7 +227,7 @@ async def ws_delete_profile(hass: HomeAssistant, connection: websocket_api.Activ
 
 
 @websocket_api.websocket_command(
-    {vol.Required("type"): "shared_diet/create_recipe", vol.Required("name"): NON_EMPTY}
+    {vol.Required("type"): "shared_diet/create_recipe", vol.Required("name"): RECIPE_NAME}
 )
 @websocket_api.async_response
 async def ws_create_recipe(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:

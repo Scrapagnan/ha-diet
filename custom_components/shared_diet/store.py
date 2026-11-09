@@ -24,6 +24,10 @@ class DuplicateNameError(Exception):
     """Another recipe already has this name (fold_name comparison)."""
 
 
+class UnknownRecipeError(ValueError):
+    """A meal references a recipe that no longer exists."""
+
+
 class InUseError(Exception):
     """Recipe is referenced by meals of these profiles."""
 
@@ -90,7 +94,7 @@ class DietStore:
         saved = copy.deepcopy(profile)
         for alt in _alts(saved):
             if "recipe" in alt and alt["recipe"] not in self._recipes:
-                raise ValueError(f"unknown recipe {alt['recipe']}")
+                raise UnknownRecipeError(alt["recipe"])
         saved["recipe_qty"] = {
             rid: {iid: qty for iid, qty in overrides.items() if iid in self._ingredient_ids(rid)}
             for rid, overrides in saved.get("recipe_qty", {}).items()

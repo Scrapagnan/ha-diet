@@ -110,6 +110,14 @@ async def test_invalid_recipe_item_rejected(client, alt):
     assert resp["error"]["code"] == "invalid_format"
 
 
+async def test_deleted_recipe_reference_has_specific_message(client):
+    profile = (await call(client, "create_profile", name="Luca"))["result"]["profile"]
+    profile["week"]["0"] = [meal("pancake", "08:00", [[{"alts": [{"recipe": "gone"}]}]])]
+    resp = await call(client, "save_profile", profile=profile)
+    assert resp["error"]["code"] == "invalid_format"
+    assert resp["error"]["message"] == "Una ricetta del pasto è stata eliminata: usa «Usa alimento semplice»"
+
+
 async def test_recipe_qty_saved_and_invalid_values_rejected(client):
     recipe = await _create_recipe(client, ingredients=[dict(INGREDIENT)])
     profile = (await call(client, "create_profile", name="Luca"))["result"]["profile"]
@@ -131,6 +139,7 @@ async def test_recipe_qty_saved_and_invalid_values_rejected(client):
     "changes",
     [
         pytest.param({"name": ""}, id="empty-name"),
+        pytest.param({"name": "   "}, id="blank-name"),
         pytest.param({"rev": 0}, id="rev-zero"),
         pytest.param({"extra": True}, id="recipe-extra-key"),
         pytest.param({"ingredients": [{**INGREDIENT, "food": ""}]}, id="empty-food"),
@@ -145,6 +154,11 @@ async def test_invalid_recipe_rejected(client, changes):
     recipe = await _create_recipe(client)
     recipe.update(changes)
     resp = await call(client, "save_recipe", recipe=recipe)
+    assert resp["error"]["code"] == "invalid_format"
+
+
+async def test_create_recipe_blank_name_rejected(client):
+    resp = await call(client, "create_recipe", name=" 	 ")
     assert resp["error"]["code"] == "invalid_format"
 
 
