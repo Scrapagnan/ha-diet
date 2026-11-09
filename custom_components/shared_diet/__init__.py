@@ -5,7 +5,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timedelta
+from pathlib import Path
 
+from homeassistant.components import frontend
+from homeassistant.components.http import StaticPathConfig
+from homeassistant.components.panel_custom import async_register_panel
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
@@ -14,7 +18,7 @@ from homeassistant.helpers.event import async_track_time_change
 from homeassistant.util import dt as dt_util
 
 from . import websocket
-from .const import DOMAIN
+from .const import DOMAIN, PANEL_URL, VERSION
 from .model import choice_for, effective_day, format_item, resolve_meal
 from .store import DietStore
 
@@ -22,10 +26,15 @@ _LOGGER = logging.getLogger(__name__)
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 PLATFORMS = [Platform.SENSOR]
+STATIC_URL = "/shared_diet_static"
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     websocket.async_register(hass)
+    # Registered once: entry reloads re-run async_setup_entry and aiohttp rejects duplicate routes.
+    await hass.http.async_register_static_paths(
+        [StaticPathConfig(STATIC_URL, str(Path(__file__).parent / "frontend"), False)]
+    )
     return True
 
 
@@ -74,6 +83,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     store = hass.data[DOMAIN]
     entry.runtime_data = store
 
+    await async_register_panel(
+        hass,
+        webcomponent_name="shared-diet-panel",
+        frontend_url_path=PANEL_URL,
+        module_url=f"{STATIC_URL}/shared-diet-panel.js?v={VERSION}",
+        sidebar_title="Dieta",
+        sidebar_icon="mdi:food-apple",
+        require_admin=False,
+    )
+
     known = set(store.profiles)
 
     def _profiles_changed() -> None:
@@ -92,4 +111,5 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    frontend.async_remove_panel(hass, PANEL_URL)
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
