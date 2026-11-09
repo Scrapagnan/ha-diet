@@ -63,6 +63,10 @@ input, select { padding: 6px 8px; min-width: 0; max-width: 100%; border: 1px sol
 .item [data-f="qty"] { grid-column: 1; } /* always start a new row, with or without the × button */
 .item .recipe-line { grid-column: 1 / 4; }
 .recipe-row { width: 100%; text-align: left; }
+.tag { display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 6px; font-size: 12px;
+  background: rgba(3, 169, 244, 0.15); color: var(--primary-color, #03a9f4); }
+.ing { display: grid; grid-template-columns: 1fr 96px auto; gap: 6px; align-items: center; margin: 4px 0; }
+.ing input { width: 100%; }
 textarea { font: inherit; font-size: 16px; color: inherit; width: 100%; padding: 6px 8px; border: 1px solid var(--divider-color, #e0e0e0);
   border-radius: 6px; background: var(--card-background-color, #fff); }
 details p { white-space: pre-line; margin: 6px 0; }
@@ -128,6 +132,23 @@ function expandItem(item, profile, recipes) {
 }
 // Display name of a meal item: the recipe's name, or the food name ("Ricetta mancante" if the recipe was deleted).
 const itemLabel = (item, recipes) => ("recipe" in item ? recipeOf(item.recipe, recipes)?.name ?? "Ricetta mancante" : item.food);
+// Sets one person's grams for a recipe ingredient (value: number), or clears the override (value: null). Returns a new map; emptied recipe maps are dropped.
+function setRecipeQty(map, rid, iid, value) {
+  const next = { ...map };
+  const byIng = { ...(next[rid] ?? {}) };
+  if (value === null) delete byIng[iid];
+  else byIng[iid] = value;
+  if (Object.keys(byIng).length) next[rid] = byIng;
+  else delete next[rid];
+  return next;
+}
+// Recipes whose folded name contains the folded query, prefix matches first (meal food suggestions).
+function matchRecipes(q, recipes) {
+  return Object.values(recipes)
+    .filter((r) => foldText(r.name).includes(q))
+    .sort((a, b) => (foldText(b.name).startsWith(q) - foldText(a.name).startsWith(q)) || a.name.localeCompare(b.name, "it"))
+    .slice(0, 6);
+}
 function resolveMeal(meal, choice, profile, recipes) {
   const opt = choice.option >= 0 && choice.option < meal.options.length ? choice.option : 0;
   const items = meal.options[opt].map((line, i) => {
@@ -170,6 +191,8 @@ function cleanProfile(p) {
   const keep = (mid) => live.has(mid) && !changed.has(mid);
   const choices = { defaults: {}, dates: {} };
   for (const [mid, c] of Object.entries(p.choices.defaults)) if (keep(mid)) choices.defaults[mid] = c;
+  const recipeQty = clone(p.recipe_qty ?? {});
+  if (Object.values(recipeQty).some((byIng) => Object.values(byIng).some((v) => v < 0))) throw new Error("La quantità non può essere negativa");
   for (const [date, byMeal] of Object.entries(p.choices.dates)) {
     const kept = Object.fromEntries(Object.entries(byMeal).filter(([mid]) => keep(mid)));
     if (Object.keys(kept).length) choices.dates[date] = kept;
@@ -181,7 +204,7 @@ function cleanProfile(p) {
       minutes: Math.min(240, Math.max(0, Math.round(Number(p.reminder.minutes) || 0))),
       notify: p.reminder.notify || null,
     },
-    week, exceptions, choices, recipe_qty: clone(p.recipe_qty ?? {}), rev: p.rev,
+    week, exceptions, choices, recipe_qty: recipeQty, rev: p.rev,
   };
 }
 
@@ -296,15 +319,20 @@ class SharedDietPanel extends HTMLElement {
     this._hideSugg();
     const q = foldText(input.value);
     if (!q) return;
-    const hits = [...this._foodNames()].filter(([k]) => k.includes(q) && k !== q)
+    const foods = [...this._foodNames()].filter(([k]) => k.includes(q) && k !== q)
       .sort(([a], [b]) => (b.startsWith(q) - a.startsWith(q)) || a.localeCompare(b)) // prefix matches first
       .slice(0, 6).map(([, name]) => name);
-    if (!hits.length) return;
+    // Recipes are offered only in meal items; an ingredient field of the Ricette tab takes foods only.
+    const recipes = input.dataset.ch === "item" ? matchRecipes(q, this._recipes) : [];
+    if (!foods.length && !recipes.length) return;
     this._suggFor = input;
+    const html = [
+      ...foods.map((h) => `<button type="button" role="option" data-act="sugg" data-v="${esc(h)}">${esc(h)}</button>`),
+      ...recipes.map((r) => `<button type="button" role="option" data-act="sugg-recipe" data-rid="${esc(r.id)}">${esc(r.name)}<span class="tag">Ricetta</span></button>`),
+    ].join("");
     // After the × button when present, so the list spans the full row under the food field.
     const anchor = input.nextElementSibling?.dataset.act === "delalt" ? input.nextElementSibling : input;
-    anchor.insertAdjacentHTML("afterend", `<div class="sugg" role="listbox">${hits.map((h) =>
-      `<button type="button" role="option" data-act="sugg" data-v="${esc(h)}">${esc(h)}</button>`).join("")}</div>`);
+    anchor.insertAdjacentHTML("afterend", `<div class="sugg" role="listbox">${html}</div>`);
   }
 
   _hideSugg() {
@@ -319,6 +347,16 @@ class SharedDietPanel extends HTMLElement {
     input.value = value;
     this._onChange({ target: input });
     input.closest(".item")?.querySelector('[data-f="qty"]')?.focus();
+  }
+
+  // Recipe suggestion: the alternative becomes {recipe}. Choices stay, since the meal's structure is unchanged.
+  _pickRecipe(rid) {
+    const input = this._suggFor;
+    this._hideSugg();
+    if (!input?.isConnected || !this._recipes[rid]) return;
+    const d = input.dataset;
+    this._list(d.ctx)[Number(d.i)].options[Number(d.o)][Number(d.l)].alts[Number(d.a)] = { recipe: rid };
+    this._edit();
   }
 
   set hass(hass) {
@@ -647,6 +685,10 @@ class SharedDietPanel extends HTMLElement {
       case "menu":
         return this.dispatchEvent(new Event("hass-toggle-menu", { bubbles: true, composed: true }));
       case "sugg": return this._pickSugg(d.v);
+      case "sugg-recipe": return this._pickRecipe(d.rid);
+      case "rreset":
+        this._draft.recipe_qty = setRecipeQty(this._draft.recipe_qty ?? {}, d.rid, d.iid, null);
+        return this._edit();
       case "save": return this._save();
       case "create": return this._createProfile();
       case "delprofile": return this._deleteProfile();
@@ -713,6 +755,10 @@ class SharedDietPanel extends HTMLElement {
         list[i].options[oi][li].alts.push(blankItem());
         this._focus = foodSel(d.ctx, i, oi, li, list[i].options[oi][li].alts.length - 1);
         break;
+      case "ualt": // back to a simple food: an empty item, as a new alternative would be
+        list[i].options[oi][li].alts[ai] = blankItem();
+        this._focus = foodSel(d.ctx, i, oi, li, ai);
+        break;
       case "delalt": {
         // Removing the sole alternative removes the line: an empty line would have nothing to show.
         const alts = list[i].options[oi][li].alts;
@@ -742,7 +788,7 @@ class SharedDietPanel extends HTMLElement {
     if (this._busy || !["INPUT", "TEXTAREA"].includes(el.tagName)) return;
     if ("newname" in el.dataset) this._newName = el.value;
     else if ("newrecipe" in el.dataset) this._newRecipe = el.value;
-    else if (["pfield", "meal", "item", "rfield", "ring"].includes(el.dataset.ch) && el.type !== "checkbox") this._onChange(e);
+    else if (["pfield", "meal", "item", "rfield", "ring", "rqty"].includes(el.dataset.ch) && el.type !== "checkbox") this._onChange(e);
     if (el.classList.contains("food")) this._suggest(el);
   }
 
@@ -794,6 +840,12 @@ class SharedDietPanel extends HTMLElement {
       case "item": {
         const a = this._list(d.ctx)[Number(d.i)].options[Number(d.o)][Number(d.l)].alts[Number(d.a)];
         a[d.f] = d.f === "qty" ? (el.value === "" ? null : Number(el.value)) : el.value;
+        return this._markDirty();
+      }
+      case "rqty": {
+        const n = Number(el.value);
+        const v = el.value === "" || !Number.isFinite(n) ? null : n; // negatives are kept, and rejected on save
+        this._draft.recipe_qty = setRecipeQty(this._draft.recipe_qty ?? {}, d.rid, d.iid, v);
         return this._markDirty();
       }
       case "copt": {
@@ -1097,6 +1149,28 @@ class SharedDietPanel extends HTMLElement {
     </section>`;
   }
 
+  // Recipe alternative in a meal: name (not editable), this person's grams per ingredient, and a way back to a simple food.
+  _recipeRow(at, li, ai, del, rid) {
+    const loc = `${at} data-l="${li}" data-a="${ai}"`;
+    const r = recipeOf(rid, this._recipes);
+    if (!r) return `<div class="item"><span class="recipe-line"><strong>Ricetta mancante</strong></span>${del}</div>
+      <div class="row"><button data-act="ualt" ${loc}>Usa alimento semplice</button></div>`;
+    const overrides = this._draft.recipe_qty?.[rid] ?? {};
+    const ings = r.ingredients.map((g) => {
+      const custom = Object.hasOwn(overrides, g.id);
+      return `<div class="ing">
+          <span>${esc(g.food)}${g.unit ? ` · ${esc(g.unit)}` : ""}</span>
+          <input type="number" min="0" step="any" value="${custom ? esc(overrides[g.id]) : ""}" placeholder="${esc(g.qty ?? "q.b.")}"
+            aria-label="Grammi di ${esc(g.food)}" data-ch="rqty" data-rid="${esc(rid)}" data-iid="${esc(g.id)}">
+          ${custom ? `<button data-act="rreset" data-rid="${esc(rid)}" data-iid="${esc(g.id)}">Ripristina default</button>` : "<span></span>"}
+        </div>`;
+    }).join("");
+    return `<div class="item"><span class="recipe-line"><strong>${esc(r.name)}</strong><span class="tag">Ricetta</span></span>${del}</div>
+      <p class="muted">Vale per tutti i pasti di ${esc(this._draft.name)}</p>
+      ${ings || `<p class="muted">Nessun ingrediente.</p>`}
+      <div class="row"><button data-act="ualt" ${loc}>Usa alimento semplice</button></div>`;
+  }
+
   _optionEditor(ctx, i, oi, opt, nOptions) {
     const at = `data-ctx="${esc(ctx)}" data-i="${i}" data-o="${oi}"`;
     const lines = opt.map((line, li) => `<div class="line">
@@ -1104,11 +1178,7 @@ class SharedDietPanel extends HTMLElement {
         ${line.alts.map((a, ai) => {
           const sep = ai ? `<div class="or">OPPURE</div>` : "";
           const del = line.alts.length > 1 ? `<button class="icon" data-act="delalt" ${at} data-l="${li}" data-a="${ai}" aria-label="Rimuovi alimento">×</button>` : "";
-          // Recipe items are not edited here yet (Task 7 adds the recipe row); shown read-only.
-          if ("recipe" in a) {
-            const r = recipeOf(a.recipe, this._recipes);
-            return `${sep}<div class="item"><span class="recipe-line">${esc(r ? `Ricetta: ${r.name}` : "Ricetta mancante")}</span>${del}</div>`;
-          }
+          if ("recipe" in a) return `${sep}${this._recipeRow(at, li, ai, del, a.recipe)}`;
           return `${sep}<div class="item">
             <input class="food" autocomplete="off" value="${esc(a.food)}" placeholder="Alimento" aria-label="Alimento"
               data-ch="item" data-f="food" ${at} data-l="${li}" data-a="${ai}">

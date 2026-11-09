@@ -24,6 +24,16 @@ Dopo l'installazione compare **Dieta** nella barra laterale. Le schede sono:
 
 Ogni salvataggio invia l'intero profilo. Se un altro utente ha salvato nel frattempo, il pannello mostra "Modificato da un altro utente, dati ricaricati" e ricarica i dati aggiornati.
 
+## Ricette
+
+Le ricette sono piatti composti da ingredienti, salvati una volta sola e usabili in tutti i profili.
+
+- **Ricette**: crea, modifica ed elimina le ricette (nome, nota di preparazione, ingredienti con quantità e unità). Una ricetta usata in una dieta non può essere eliminata: il messaggio elenca i profili che la usano.
+- **Nei pasti**: nel campo **Alimento** di un pasto compaiono anche le ricette, marcate "Ricetta". Scegliendone una, il pasto mostra la ricetta con i suoi ingredienti.
+- **Grammature per persona**: ogni persona può avere grammature diverse dal default della ricetta. La grammatura personalizzata vale per tutti i pasti di quella persona in cui compare la ricetta. Lascia il campo vuoto per usare il default; "Ripristina default" annulla la personalizzazione.
+- **Spesa**: la lista della spesa include gli ingredienti delle ricette, con le grammature della persona.
+- **Alimento semplice**: "Usa alimento semplice" riporta il pasto a un alimento normale, da compilare a mano.
+
 ## Sensori
 
 Per ogni profilo vengono creati due sensori, dove `<nome>` è il nome del profilo in minuscolo (es. `luca`):

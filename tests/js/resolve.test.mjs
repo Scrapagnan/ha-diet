@@ -11,8 +11,8 @@ const ctx = {
   customElements: { get: () => undefined, define() {} },
 };
 vm.createContext(ctx);
-const { expandItem, fmtItem, resolveMeal, cleanProfile, cleanRecipe, SharedDietPanel } = vm.runInContext(
-  `${readFileSync(panel, "utf8")}\n;({ expandItem, fmtItem, resolveMeal, cleanProfile, cleanRecipe, SharedDietPanel });`, ctx);
+const { expandItem, fmtItem, resolveMeal, cleanProfile, cleanRecipe, setRecipeQty, matchRecipes, SharedDietPanel } = vm.runInContext(
+  `${readFileSync(panel, "utf8")}\n;({ expandItem, fmtItem, resolveMeal, cleanProfile, cleanRecipe, setRecipeQty, matchRecipes, SharedDietPanel });`, ctx);
 // Recipe draft cleaning: trims, drops ingredients without food, keeps rev, rejects negative quantities.
 {
   const cleaned = cleanRecipe({ id: "r1", name: "  Pancake ", note: " Mescolare ", rev: 3, ingredients: [
@@ -91,6 +91,28 @@ const RECIPES = {
   assert.deepStrictEqual(c.week[0][0].options, [[{ alts: [{ recipe: "r1" }] }]]);
   assert.deepStrictEqual(c.recipe_qty, { r1: { i1: 80 } });
   assert.deepStrictEqual(plain(cleanProfile({ ...draft, recipe_qty: undefined })).recipe_qty, {});
+  assert.throws(() => cleanProfile({ ...draft, recipe_qty: { r1: { i1: -1 } } }), /negativa/);
+}
+
+// setRecipeQty: sets, clears (dropping emptied recipe maps), keeps negatives for the save check, never mutates.
+{
+  const m = plain(setRecipeQty({}, "r1", "i1", 40));
+  assert.deepStrictEqual(m, { r1: { i1: 40 } });
+  assert.deepStrictEqual(plain(setRecipeQty(m, "r1", "i2", 0)), { r1: { i1: 40, i2: 0 } });
+  assert.deepStrictEqual(plain(setRecipeQty(m, "r1", "i1", null)), {});
+  assert.deepStrictEqual(plain(setRecipeQty({ r1: { i1: 40 }, r2: { i3: 2 } }, "r2", "i3", null)), { r1: { i1: 40 } });
+  assert.deepStrictEqual(plain(setRecipeQty({ r1: { i1: 40 } }, "r1", "i1", -5)), { r1: { i1: -5 } });
+  const orig = { r1: { i1: 40 } };
+  setRecipeQty(orig, "r1", "i1", 9);
+  assert.equal(orig.r1.i1, 40);
+}
+
+// matchRecipes: folded substring match, prefix matches first, no match is empty.
+{
+  const recipes = { a: { id: "a", name: "Pancake" }, b: { id: "b", name: "Lasagne al pancake" }, c: { id: "c", name: "Minestra" } };
+  assert.deepStrictEqual(plain(matchRecipes("pan", recipes)).map((r) => r.id), ["a", "b"]);
+  assert.deepStrictEqual(plain(matchRecipes("lasagne", recipes)).map((r) => r.id), ["b"]);
+  assert.deepStrictEqual(plain(matchRecipes("zz", recipes)), []);
 }
 
 // Read views: Oggi shows recipe name, grams, collapsible note; editor and alternatives never crash on {recipe} items.
@@ -119,7 +141,13 @@ const RECIPES = {
   panelEl._view = "week";
   panelEl._foldToggled.add(`w${panelEl._wday}:m1`); // unfold the meal editor
   const editor = panelEl._body();
-  assert.match(editor, /Ricetta: Pancake/);
+  // Recipe row: name, per-person grams in the input (override 40, default 60), reset button, note, simple-food button.
+  assert.match(editor, /<strong>Pancake<\/strong><span class="tag">Ricetta<\/span>/);
+  assert.match(editor, /value="40" placeholder="60"/);
+  assert.match(editor, /placeholder="1"\s+aria-label="Grammi di Uova"/);
+  assert.equal((editor.match(/Ripristina default/g) ?? []).length, 1);
+  assert.match(editor, /Vale per tutti i pasti di Luca/);
+  assert.match(editor, /Usa alimento semplice/);
   assert.doesNotMatch(editor, /undefined|NaN/);
   panelEl._foldToggled.clear();
   assert.match(panelEl._body(), /<p class="muted summary">Pancake \/ Latte<\/p>/);
@@ -130,6 +158,31 @@ const RECIPES = {
   assert.match(choices, /<option value="0" selected>Pancake<\/option>/);
   assert.match(choices, /<option value="1">Latte<\/option>/);
   assert.doesNotMatch(choices, /undefined|NaN/);
+}
+
+// Deleted recipe in a meal: "Ricetta mancante" with only the simple-food button; profile name is escaped in the note.
+{
+  const meal = { id: "m1", name: "Colazione", time: null, options: [[{ alts: [{ recipe: "gone" }] }]] };
+  const week = {}; for (let d = 0; d < 7; d++) week[d] = [meal];
+  const profile = { id: "p1", name: "<i>Luca</i>", person: null, reminder: { enabled: false, minutes: 15, notify: null },
+    week, exceptions: {}, choices: { defaults: {}, dates: {} }, rev: 1, recipe_qty: {} };
+  const p = new SharedDietPanel();
+  p._recipes = {};
+  p._profiles = { p1: profile };
+  p._profileId = "p1";
+  p._draft = JSON.parse(JSON.stringify(profile));
+  p._view = "week";
+  p._foldToggled.add(`w${p._wday}:m1`);
+  const body = p._body();
+  assert.match(body, /Ricetta mancante/);
+  assert.match(body, /Usa alimento semplice/);
+  assert.doesNotMatch(body, /Ripristina default|Vale per tutti|undefined|NaN/);
+  p._foldToggled.clear();
+  p._recipes = RECIPES;
+  p._draft.recipe_qty = {};
+  p._foldToggled.add(`w${p._wday}:m1`);
+  p._draft.week[p._wday] = [{ ...meal, options: [[{ alts: [{ recipe: "r1" }] }]] }];
+  assert.match(p._body(), /Vale per tutti i pasti di &lt;i&gt;Luca&lt;\/i&gt;/);
 }
 
 console.log("resolve.test.mjs: all assertions passed");
