@@ -64,3 +64,18 @@ async def test_delete_unknown_is_noop_without_notify(hass):
     await s.async_delete_profile(p["id"])
     assert s.profiles == {}
     assert calls == [1, 1]
+
+
+async def test_raising_listener_does_not_block_others_or_fail_save(hass):
+    s = DietStore(hass)
+    await s.async_load()
+    calls = []
+
+    def boom():
+        raise RuntimeError("listener broke")
+
+    s.async_add_listener(boom)
+    s.async_add_listener(lambda: calls.append(1))
+    p = await s.async_create_profile("Ola")
+    assert calls == [1]
+    assert s.profiles[p["id"]]["name"] == "Ola"

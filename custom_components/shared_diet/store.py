@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import logging
 import uuid
 from collections.abc import Callable
 
@@ -10,6 +11,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
 from .const import STORAGE_KEY, STORAGE_VERSION
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class ConflictError(Exception):
@@ -78,4 +81,7 @@ class DietStore:
     async def _async_commit(self) -> None:
         await self._store.async_save({"profiles": copy.deepcopy(self._profiles)})
         for cb in list(self._listeners):
-            cb()
+            try:
+                cb()
+            except Exception:  # a broken listener must not fail a saved change
+                _LOGGER.exception("shared_diet listener failed")
