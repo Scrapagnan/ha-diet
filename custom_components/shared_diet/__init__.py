@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timedelta
 
@@ -30,29 +31,39 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
 async def _send_reminders(hass: HomeAssistant, store: DietStore) -> None:
     now = dt_util.now()
+    # store.profiles is a deep copy, so this snapshot is safe to use across the awaits below.
+    sends: list[tuple[str, dict]] = []
     for profile in store.profiles.values():
-        reminder = profile["reminder"]
-        if not (reminder["enabled"] and reminder["notify"]):
-            continue
-        target = now + timedelta(minutes=reminder["minutes"])
-        hhmm = target.strftime("%H:%M")
-        service = reminder["notify"].removeprefix("notify.")
-        for meal in effective_day(profile, target.date()):
-            if meal["time"] != hhmm:
+        try:
+            reminder = profile["reminder"]
+            if not (reminder["enabled"] and reminder["notify"]):
                 continue
-            resolved = resolve_meal(meal, choice_for(profile, target.date(), meal["id"]))
-            try:
-                await hass.services.async_call(
-                    "notify",
-                    service,
-                    {
-                        "title": f"{profile['name']}: {meal['name']} alle {hhmm}",
-                        "message": ", ".join(format_item(i) for i in resolved["items"]),
-                    },
-                    blocking=True,
+            target = now + timedelta(minutes=reminder["minutes"])
+            hhmm = target.strftime("%H:%M")
+            service = reminder["notify"].removeprefix("notify.")
+            for meal in effective_day(profile, target.date()):
+                if meal["time"] != hhmm:
+                    continue
+                resolved = resolve_meal(meal, choice_for(profile, target.date(), meal["id"]))
+                sends.append(
+                    (
+                        service,
+                        {
+                            "title": f"{profile['name']}: {meal['name']} alle {hhmm}",
+                            "message": ", ".join(format_item(i) for i in resolved["items"]),
+                        },
+                    )
                 )
-            except Exception:
-                _LOGGER.warning("shared_diet reminder failed: notify.%s unavailable", service)
+        except Exception as err:  # one malformed profile must not skip the others
+            _LOGGER.warning("shared_diet reminder skipped for profile %s: %s", profile.get("id"), err)
+
+    async def _send(service: str, data: dict) -> None:
+        try:
+            await hass.services.async_call("notify", service, data, blocking=True)
+        except Exception as err:  # a slow or missing service must not stall or break the others
+            _LOGGER.warning("shared_diet reminder failed for notify.%s: %s", service, err)
+
+    await asyncio.gather(*(_send(service, data) for service, data in sends))
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

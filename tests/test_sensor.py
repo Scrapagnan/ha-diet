@@ -32,22 +32,32 @@ COLAZIONE = meal("colazione", "Colazione", "07:30", [item("Latte", 200.0, "ml")]
 PRANZO = meal("pranzo", "Pranzo", "13:00", [item("Pasta integrale", 80.0), item("Olio", None, "", "q.b.")])
 
 
-async def _setup_luca(hass, notify=None):
-    """Set up the entry, then create profile "Luca" with two meals a day and the given reminder."""
+async def _setup_entry(hass):
     await hass.config.async_set_time_zone("Europe/Rome")
     entry = MockConfigEntry(domain=DOMAIN)
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    store = hass.data[DOMAIN]
-    created = await store.async_create_profile("Luca")
+    return hass.data[DOMAIN]
+
+
+async def _add_profile(hass, store, name, meals, notify=None):
+    """Create a profile whose every weekday has `meals`, with the given reminder."""
+    created = await store.async_create_profile(name)
     await hass.async_block_till_done()
     profile = store.profiles[created["id"]]
-    profile["week"] = {str(d): copy.deepcopy([COLAZIONE, PRANZO]) for d in range(7)}
+    profile["week"] = {str(d): copy.deepcopy(meals) for d in range(7)}
     profile["reminder"] = {"enabled": notify is not None, "minutes": 15, "notify": notify}
     await store.async_save_profile(profile)
     await hass.async_block_till_done()
-    return store, created["id"]
+    return created["id"]
+
+
+async def _setup_luca(hass, notify=None):
+    """Set up the entry, then create profile "Luca" with two meals a day and the given reminder."""
+    store = await _setup_entry(hass)
+    profile_id = await _add_profile(hass, store, "Luca", [COLAZIONE, PRANZO], notify)
+    return store, profile_id
 
 
 async def test_sensors_reflect_current_and_next(hass, freezer):
@@ -106,3 +116,28 @@ async def test_deleting_profile_removes_its_entities(hass, freezer):
     await hass.async_block_till_done()
     assert registry.async_get("sensor.luca_pasto_attuale") is None
     assert registry.async_get("sensor.luca_prossimo_pasto") is None
+
+
+async def test_malformed_profile_does_not_skip_others(hass, freezer, monkeypatch, caplog):
+    import custom_components.shared_diet as integration
+
+    real_resolve = integration.resolve_meal
+
+    def flaky_resolve(meal, choice):
+        if meal["id"] == "bad":
+            raise RuntimeError("corrupt meal")
+        return real_resolve(meal, choice)
+
+    monkeypatch.setattr(integration, "resolve_meal", flaky_resolve)
+    calls = async_mock_service(hass, "notify", "mobile_app_x")
+    freezer.move_to(at(10, 0))
+    store = await _setup_entry(hass)
+    # The malformed profile is created first so it is iterated before the valid one.
+    bad_meal = meal("bad", "Rotto", "13:00", [item("Nulla", 1.0)])
+    await _add_profile(hass, store, "Bad", [bad_meal], notify="notify.mobile_app_x")
+    await _add_profile(hass, store, "Luca", [COLAZIONE, PRANZO], notify="notify.mobile_app_x")
+    freezer.move_to(at(12, 45))
+    async_fire_time_changed(hass, at(12, 45))
+    await hass.async_block_till_done()
+    assert [c.data["title"] for c in calls] == ["Luca: Pranzo alle 13:00"]
+    assert "Bad" in caplog.text
