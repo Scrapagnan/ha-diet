@@ -103,6 +103,9 @@ PROFILE_SCHEMA = vol.Schema(
             vol.Required("defaults"): {NON_EMPTY: CHOICE},
             vol.Required("dates"): {_iso_date: {NON_EMPTY: CHOICE}},
         },
+        vol.Optional("recipe_qty", default=dict): {
+            NON_EMPTY: {NON_EMPTY: vol.All(vol.Coerce(float), vol.Range(min=0))}
+        },
         vol.Required("rev"): _int(1),
     },
     extra=vol.PREVENT_EXTRA,
