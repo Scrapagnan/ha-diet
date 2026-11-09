@@ -5,10 +5,16 @@ from __future__ import annotations
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
+from .const import DOMAIN
+from .store import DietStore
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    # Task 4 stores the DietStore here.
-    entry.runtime_data = None
+    if DOMAIN not in hass.data:
+        store = DietStore(hass)
+        await store.async_load()
+        hass.data[DOMAIN] = store
+    entry.runtime_data = hass.data[DOMAIN]
     return True
 
 
