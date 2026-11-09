@@ -28,6 +28,29 @@ async def test_legacy_storage_loads_with_empty_recipes_and_recipe_qty(hass, hass
     assert s.profiles["p1"]["recipe_qty"] == {}
 
 
+async def test_legacy_flat_ingredients_migrate_and_keep_qty_override(hass, hass_storage):
+    hass_storage[STORAGE_KEY] = {
+        "version": 1,
+        "data": {
+            "profiles": {"p1": {"id": "p1", "name": "Luca", "rev": 1, "recipe_qty": {"r1": {"i1": 30.0}}}},
+            "recipes": {
+                "r1": {
+                    "id": "r1",
+                    "name": "Pancake",
+                    "note": "",
+                    "ingredients": [{"id": "i1", "food": "Farina", "qty": 60.0, "unit": "g"}],
+                    "rev": 1,
+                }
+            },
+        },
+    }
+    s = await _store(hass)
+    assert s.recipes["r1"]["ingredients"] == [
+        {"id": "i1", "alts": [{"id": "i1", "food": "Farina", "qty": 60.0, "unit": "g"}]}
+    ]
+    assert s.profiles["p1"]["recipe_qty"] == {"r1": {"i1": 30.0}}
+
+
 async def test_recipes_survive_reload(hass, hass_storage):
     s = await _store(hass)
     r = await s.async_create_recipe("Pancake")
@@ -115,16 +138,24 @@ async def test_save_profile_with_unknown_recipe_raises_and_changes_nothing(hass)
     assert s.profiles[p["id"]] == before
 
 
-async def test_save_profile_prunes_recipe_qty(hass):
+async def test_save_profile_prunes_recipe_qty_to_alt_ids(hass):
     s = await _store(hass)
     r = await s.async_create_recipe("Pancake")
-    r["ingredients"] = [{"id": "i1", "food": "Farina", "qty": 60.0, "unit": "g"}]
+    r["ingredients"] = [
+        {
+            "id": "i1",
+            "alts": [
+                {"id": "a1", "food": "Farina", "qty": 60.0, "unit": "g"},
+                {"id": "a2", "food": "Avena", "qty": 50.0, "unit": "g"},
+            ],
+        }
+    ]
     r = await s.async_save_recipe(r)
     p = await s.async_create_profile("Luca")
-    p["recipe_qty"] = {r["id"]: {"i1": 1, "gone": 2}, "nope": {"i1": 3}}
+    p["recipe_qty"] = {r["id"]: {"a1": 1, "a2": 2, "i1": 3, "gone": 4}, "nope": {"a1": 5}}
     saved = await s.async_save_profile(p)
-    assert saved["recipe_qty"] == {r["id"]: {"i1": 1}}
-    assert s.profiles[p["id"]]["recipe_qty"] == {r["id"]: {"i1": 1}}
+    assert saved["recipe_qty"] == {r["id"]: {"a1": 1, "a2": 2}}
+    assert s.profiles[p["id"]]["recipe_qty"] == {r["id"]: {"a1": 1, "a2": 2}}
 
 
 async def test_recipe_changes_notify_listeners(hass):

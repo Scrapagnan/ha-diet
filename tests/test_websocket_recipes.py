@@ -5,7 +5,8 @@ from pytest_homeassistant_custom_component.common import async_mock_service
 
 from test_websocket import MONDAY, call, client, meal, setup_entry  # noqa: F401
 
-INGREDIENT = {"id": "i1", "food": "Farina", "qty": 60.0, "unit": "g"}
+ALT = {"id": "a1", "food": "Farina", "qty": 60.0, "unit": "g"}
+INGREDIENT = {"id": "i1", "alts": [dict(ALT)]}
 
 
 def recipe_payload(**changes):
@@ -122,13 +123,13 @@ async def test_recipe_qty_saved_and_invalid_values_rejected(client):
     recipe = await _create_recipe(client, ingredients=[dict(INGREDIENT)])
     profile = (await call(client, "create_profile", name="Luca"))["result"]["profile"]
 
-    profile["recipe_qty"] = {recipe["id"]: {"i1": 30.0, "gone": 5.0}}
+    profile["recipe_qty"] = {recipe["id"]: {"a1": 30.0, "i1": 5.0, "gone": 5.0}}
     resp = await call(client, "save_profile", profile=profile)
     assert resp["success"], resp
     saved = resp["result"]["profile"]
-    assert saved["recipe_qty"] == {recipe["id"]: {"i1": 30.0}}
+    assert saved["recipe_qty"] == {recipe["id"]: {"a1": 30.0}}
 
-    for bad in ({recipe["id"]: {"i1": -1}}, {recipe["id"]: {"i1": None}}, {"": {"i1": 1}}, {recipe["id"]: {"": 1}}):
+    for bad in ({recipe["id"]: {"a1": -1}}, {recipe["id"]: {"a1": None}}, {"": {"a1": 1}}, {recipe["id"]: {"": 1}}):
         profile = dict(saved)
         profile["recipe_qty"] = bad
         resp = await call(client, "save_profile", profile=profile)
@@ -142,12 +143,21 @@ async def test_recipe_qty_saved_and_invalid_values_rejected(client):
         pytest.param({"name": "   "}, id="blank-name"),
         pytest.param({"rev": 0}, id="rev-zero"),
         pytest.param({"extra": True}, id="recipe-extra-key"),
-        pytest.param({"ingredients": [{**INGREDIENT, "food": ""}]}, id="empty-food"),
+        pytest.param({"ingredients": [{**INGREDIENT, "alts": [{**ALT, "food": ""}]}]}, id="empty-food"),
         pytest.param({"ingredients": [{**INGREDIENT, "id": ""}]}, id="empty-ingredient-id"),
-        pytest.param({"ingredients": [{**INGREDIENT, "qty": -1}]}, id="negative-qty"),
-        pytest.param({"ingredients": [{**INGREDIENT, "qty": True}]}, id="bool-qty"),
+        pytest.param({"ingredients": [{**INGREDIENT, "alts": [{**ALT, "id": ""}]}]}, id="empty-alt-id"),
+        pytest.param({"ingredients": [{**INGREDIENT, "alts": [{**ALT, "qty": -1}]}]}, id="negative-qty"),
+        pytest.param({"ingredients": [{**INGREDIENT, "alts": [{**ALT, "qty": True}]}]}, id="bool-qty"),
         pytest.param({"ingredients": [{**INGREDIENT, "note": ""}]}, id="ingredient-extra-key"),
-        pytest.param({"ingredients": [dict(INGREDIENT), {**INGREDIENT, "food": "Uova"}]}, id="duplicate-ingredient-id"),
+        pytest.param({"ingredients": [{**INGREDIENT, "alts": [{**ALT, "note": ""}]}]}, id="alt-extra-key"),
+        pytest.param({"ingredients": [{**INGREDIENT, "alts": []}]}, id="empty-alts"),
+        pytest.param(
+            {"ingredients": [{"id": "i1", "food": "Farina", "qty": 60.0, "unit": "g"}]},
+            id="legacy-flat-ingredient",
+        ),
+        pytest.param({"ingredients": [dict(INGREDIENT), {"id": "i1", "alts": [{**ALT, "id": "a2"}]}]}, id="duplicate-ingredient-id"),
+        pytest.param({"ingredients": [dict(INGREDIENT), {"id": "i2", "alts": [dict(ALT)]}]}, id="duplicate-alt-id-across-ingredients"),
+        pytest.param({"ingredients": [{"id": "i1", "alts": [dict(ALT), {**ALT, "food": "Avena"}]}]}, id="duplicate-alt-id-same-ingredient"),
     ],
 )
 async def test_invalid_recipe_rejected(client, changes):
@@ -157,14 +167,51 @@ async def test_invalid_recipe_rejected(client, changes):
     assert resp["error"]["code"] == "invalid_format"
 
 
+async def test_recipe_with_alternatives_accepted(client):
+    alts = [dict(ALT), {"id": "a2", "food": "Avena", "qty": 50.0, "unit": "g"}]
+    recipe = await _create_recipe(
+        client,
+        ingredients=[{"id": "i1", "alts": alts}, {"id": "i2", "alts": [{"id": "a3", "food": "Uova", "qty": 1.0, "unit": "pz"}]}],
+    )
+    assert [a["id"] for a in recipe["ingredients"][0]["alts"]] == ["a1", "a2"]
+
+
 async def test_create_recipe_blank_name_rejected(client):
     resp = await call(client, "create_recipe", name=" 	 ")
     assert resp["error"]["code"] == "invalid_format"
 
 
 async def test_recipe_ingredient_qty_may_be_null(client):
-    recipe = await _create_recipe(client, ingredients=[{**INGREDIENT, "qty": None}])
-    assert recipe["ingredients"][0]["qty"] is None
+    recipe = await _create_recipe(client, ingredients=[{**INGREDIENT, "alts": [{**ALT, "qty": None}]}])
+    assert recipe["ingredients"][0]["alts"][0]["qty"] is None
+
+
+@pytest.mark.parametrize(
+    "choice",
+    [
+        pytest.param({"option": 0, "lines": {}, "recipes": {"": {"i1": "a1"}}}, id="empty-recipe-id"),
+        pytest.param({"option": 0, "lines": {}, "recipes": {"r1": {"": "a1"}}}, id="empty-ingredient-id"),
+        pytest.param({"option": 0, "lines": {}, "recipes": {"r1": {"i1": ""}}}, id="empty-alt-id"),
+        pytest.param({"option": 0, "lines": {}, "recipes": {"r1": "a1"}}, id="recipes-value-not-object"),
+        pytest.param({"option": 0, "lines": {}, "extra": 1}, id="choice-extra-key"),
+    ],
+)
+async def test_invalid_choice_rejected(client, choice):
+    profile = (await call(client, "create_profile", name="Luca"))["result"]["profile"]
+    profile["choices"]["defaults"] = {"pancake": choice}
+    resp = await call(client, "save_profile", profile=profile)
+    assert resp["error"]["code"] == "invalid_format"
+
+
+async def test_choice_with_recipes_accepted(client):
+    recipe = await _create_recipe(client, ingredients=[dict(INGREDIENT)])
+    profile = (await call(client, "create_profile", name="Luca"))["result"]["profile"]
+    profile["week"]["0"] = [meal("pancake", "08:00", [[{"alts": [{"recipe": recipe["id"]}]}]])]
+    profile["choices"]["defaults"] = {"pancake": {"option": 0, "lines": {}, "recipes": {recipe["id"]: {"i1": "a1"}}}}
+    resp = await call(client, "save_profile", profile=profile)
+    assert resp["success"], resp
+    saved = resp["result"]["profile"]["choices"]["defaults"]["pancake"]
+    assert saved["recipes"] == {recipe["id"]: {"i1": "a1"}}
 
 
 async def test_subscribe_pushes_recipes(client):
@@ -184,7 +231,10 @@ async def test_shopping_expands_recipe_ingredients(hass, client):
     calls = async_mock_service(hass, "todo", "add_item")
     recipe = await _create_recipe(
         client,
-        ingredients=[dict(INGREDIENT), {"id": "i2", "food": "Uova", "qty": 1.0, "unit": "pz"}],
+        ingredients=[
+            dict(INGREDIENT),
+            {"id": "i2", "alts": [{"id": "a2", "food": "Uova", "qty": 1.0, "unit": "pz"}]},
+        ],
     )
     profile = (await call(client, "create_profile", name="Luca"))["result"]["profile"]
     profile["week"]["0"] = [meal("pancake", "08:00", [[{"alts": [{"recipe": recipe["id"]}]}]])]

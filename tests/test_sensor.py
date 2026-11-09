@@ -176,8 +176,8 @@ async def _setup_pancake(hass, notify=None):
     store = await _setup_entry(hass)
     recipe = await store.async_create_recipe("Pancake")
     recipe["ingredients"] = [
-        {"id": "farina", "food": "Farina", "qty": 60.0, "unit": "g"},
-        {"id": "uova", "food": "Uova", "qty": 1.0, "unit": "pz"},
+        {"id": "farina", "alts": [{"id": "farina", "food": "Farina", "qty": 60.0, "unit": "g"}]},
+        {"id": "uova", "alts": [{"id": "uova", "food": "Uova", "qty": 1.0, "unit": "pz"}]},
     ]
     recipe = await store.async_save_recipe(recipe)
     pancake = {
@@ -208,12 +208,36 @@ async def test_recipe_save_updates_sensor_without_time_tick(hass, freezer):
         "Pancake: Farina 40 g, Uova 1 pz"
     ]
     recipe = store.recipes[recipe["id"]]
-    recipe["ingredients"][1]["qty"] = 2.0  # Uova has no profile override
+    recipe["ingredients"][1]["alts"][0]["qty"] = 2.0  # Uova has no profile override
     await store.async_save_recipe(recipe)
     await hass.async_block_till_done()
     assert hass.states.get("sensor.luca_prossimo_pasto").attributes["items"] == [
         "Pancake: Farina 40 g, Uova 2 pz"
     ]
+
+
+async def test_sensor_shows_chosen_alternative(hass, freezer):
+    freezer.move_to(at(10, 0))
+    store = await _setup_entry(hass)
+    recipe = await store.async_create_recipe("Pancake")
+    recipe["ingredients"] = [
+        {"id": "farina", "alts": [{"id": "farina", "food": "Farina", "qty": 60.0, "unit": "g"}]},
+        {
+            "id": "latte",
+            "alts": [
+                {"id": "latte", "food": "Latte", "qty": 100.0, "unit": "ml"},
+                {"id": "soia", "food": "Soia", "qty": 120.0, "unit": "ml"},
+            ],
+        },
+    ]
+    recipe = await store.async_save_recipe(recipe)
+    pancake = {"id": "pancake", "name": "Pancake", "time": "13:00", "options": [[{"alts": [{"recipe": recipe["id"]}]}]]}
+    profile_id = await _add_profile(hass, store, "Luca", [COLAZIONE, pancake])
+    profile = store.profiles[profile_id]
+    profile["choices"]["defaults"] = {"pancake": {"option": 0, "lines": {}, "recipes": {recipe["id"]: {"latte": "soia"}}}}
+    await store.async_save_profile(profile)
+    await hass.async_block_till_done()
+    assert hass.states.get("sensor.luca_prossimo_pasto").attributes["items"] == ["Pancake: Farina 60 g, Soia 120 ml"]
 
 
 async def test_reminder_message_contains_recipe_text(hass, freezer):

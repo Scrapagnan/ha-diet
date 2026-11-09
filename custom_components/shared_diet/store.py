@@ -72,6 +72,11 @@ class DietStore:
         self._recipes = data.get("recipes", {})
         for profile in self._profiles.values():
             profile.setdefault("recipe_qty", {})
+        for recipe in self._recipes.values():
+            for ing in recipe["ingredients"]:
+                if "food" in ing and "alts" not in ing:  # pre-alternatives flat ingredient
+                    flat = {k: ing.pop(k) for k in ("food", "qty", "unit")}
+                    ing["alts"] = [{"id": ing["id"], **flat}]
 
     @property
     def profiles(self) -> dict[str, dict]:
@@ -96,7 +101,7 @@ class DietStore:
             if "recipe" in alt and alt["recipe"] not in self._recipes:
                 raise UnknownRecipeError(alt["recipe"])
         saved["recipe_qty"] = {
-            rid: {iid: qty for iid, qty in overrides.items() if iid in self._ingredient_ids(rid)}
+            rid: {aid: qty for aid, qty in overrides.items() if aid in self._alt_ids(rid)}
             for rid, overrides in saved.get("recipe_qty", {}).items()
             if rid in self._recipes
         }
@@ -158,8 +163,8 @@ class DietStore:
         if any(fold_name(r["name"]) == key for rid, r in self._recipes.items() if rid != own_id):
             raise DuplicateNameError(name)
 
-    def _ingredient_ids(self, recipe_id: str) -> set[str]:
-        return {i["id"] for i in self._recipes[recipe_id]["ingredients"]}
+    def _alt_ids(self, recipe_id: str) -> set[str]:
+        return {a["id"] for i in self._recipes[recipe_id]["ingredients"] for a in i["alts"]}
 
     async def _async_commit(self) -> None:
         await self._store.async_save(

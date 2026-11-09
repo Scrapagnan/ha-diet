@@ -65,11 +65,12 @@ def _qty(value: Any) -> float | None:
     return number
 
 
-def _unique_ids(items: list) -> list:
-    ids = [i["id"] for i in items]
-    if len(set(ids)) != len(ids):
-        raise vol.Invalid("ingredient ids must be unique")
-    return items
+def _unique_ids(ingredients: list) -> list:
+    ids = [i["id"] for i in ingredients]
+    alt_ids = [a["id"] for i in ingredients for a in i["alts"]]
+    if len(set(ids)) != len(ids) or len(set(alt_ids)) != len(alt_ids):
+        raise vol.Invalid("ingredient and alternative ids must be unique")
+    return ingredients
 
 
 def _nonnull_qty(value: Any) -> float:
@@ -99,11 +100,15 @@ ITEM = {
     vol.Required("note"): str,
 }
 ITEM_OR_RECIPE = vol.Any(ITEM, {vol.Required("recipe"): NON_EMPTY})
-INGREDIENT = {
+ALT = {
     vol.Required("id"): NON_EMPTY,
     vol.Required("food"): NON_EMPTY,
     vol.Required("qty"): _qty,
     vol.Required("unit"): str,
+}
+INGREDIENT = {
+    vol.Required("id"): NON_EMPTY,
+    vol.Required("alts"): vol.All([ALT], vol.Length(min=1)),
 }
 RECIPE_SCHEMA = vol.Schema(
     {
@@ -125,6 +130,7 @@ MEAL = {
 CHOICE = {
     vol.Required("option"): _int(0),
     vol.Required("lines"): {_pattern(r"\d+"): _int(0)},
+    vol.Optional("recipes"): {NON_EMPTY: {NON_EMPTY: NON_EMPTY}},
 }
 PROFILE_SCHEMA = vol.Schema(
     {
