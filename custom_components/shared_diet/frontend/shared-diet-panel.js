@@ -134,6 +134,41 @@ function cleanProfile(p) {
   };
 }
 
+// Three-way merge for save conflicts. base: profile when editing started; mine: cleaned draft; theirs: latest server copy.
+// Each key is a unit. Mine wins where only I changed it, theirs otherwise; a true overlap keeps theirs and is listed.
+const canon = (v) => (v && typeof v === "object"
+  ? Array.isArray(v) ? v.map(canon) : Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon(v[k])]))
+  : v);
+const same = (a, b) => JSON.stringify(canon(a)) === JSON.stringify(canon(b));
+function mergeProfiles(base, mine, theirs) {
+  const merged = clone(theirs);
+  const overlaps = [];
+  const take = (label, b, m, t) => {
+    const mineChanged = !same(m, b);
+    const overlap = mineChanged && !same(t, b) && !same(m, t);
+    if (overlap) overlaps.push(label);
+    const v = mineChanged && !overlap ? m : t;
+    return v === undefined ? undefined : clone(v);
+  };
+  const mergeMap = (prefix, b, m, t, target) => {
+    for (const k of new Set([...Object.keys(b), ...Object.keys(m), ...Object.keys(t)])) {
+      const v = take(prefix + k, b[k], m[k], t[k]);
+      if (v === undefined) delete target[k];
+      else target[k] = v;
+    }
+  };
+  for (const k of ["name", "person", "reminder"]) merged[k] = take(k, base[k], mine[k], theirs[k]);
+  for (let d = 0; d < 7; d++) merged.week[d] = take(`week.${d}`, base.week[d], mine.week[d], theirs.week[d]);
+  mergeMap("exceptions.", base.exceptions, mine.exceptions, theirs.exceptions, merged.exceptions);
+  mergeMap("choices.defaults.", base.choices.defaults, mine.choices.defaults, theirs.choices.defaults, merged.choices.defaults);
+  for (const date of new Set([...Object.keys(base.choices.dates), ...Object.keys(mine.choices.dates), ...Object.keys(theirs.choices.dates)])) {
+    const target = (merged.choices.dates[date] ??= {});
+    mergeMap(`choices.dates.${date}.`, base.choices.dates[date] ?? {}, mine.choices.dates[date] ?? {}, theirs.choices.dates[date] ?? {}, target);
+    if (!Object.keys(target).length) delete merged.choices.dates[date];
+  }
+  return { merged, overlaps };
+}
+
 class SharedDietPanel extends HTMLElement {
   constructor() {
     super();
