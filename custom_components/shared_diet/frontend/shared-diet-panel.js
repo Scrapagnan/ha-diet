@@ -601,8 +601,9 @@ class SharedDietPanel extends HTMLElement {
   _datalists() {
     const meals = Object.values(this._profiles).flatMap((p) => [...Object.values(p.week).flat(), ...Object.values(p.exceptions).flat()]);
     const items = meals.flatMap((m) => m.options.flat().flatMap((l) => l.alts));
-    const foods = [...new Set(items.map((i) => i.food.trim()).filter(Boolean))].sort();
-    const units = [...new Set(["g", "ml", "pz", ...items.map((i) => i.unit.trim()).filter(Boolean)])];
+    // Same normalization as model.py shopping_items: collapsed spaces for foods, case-insensitive units.
+    const foods = [...new Set(items.map((i) => i.food.trim().replace(/\s+/g, " ")).filter(Boolean))].sort();
+    const units = [...new Set(["g", "ml", "pz", ...items.map((i) => i.unit.trim().toLowerCase()).filter(Boolean)])];
     return `<datalist id="foods">${foods.map((f) => `<option value="${esc(f)}">`).join("")}</datalist>
       <datalist id="units">${units.map((u) => `<option value="${esc(u)}">`).join("")}</datalist>`;
   }
