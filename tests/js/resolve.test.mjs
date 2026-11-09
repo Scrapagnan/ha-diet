@@ -361,6 +361,22 @@ const RECIPES = {
   assert.match(p._resolved(withChoice, iso, true), /<li class="muted">Alternativa a Soia: Latte 100 ml<\/li>/);
 }
 {
+  // Same recipe on two lines of the chosen path: one select per ingredient, not one per line.
+  const R = { ...RECIPES, r3: { id: "r3", name: "Caffè freddo", note: "", rev: 1, ingredients: [
+    { id: "i8", alts: [{ id: "a8", food: "Zucchero", qty: 10, unit: "g" }, { id: "a9", food: "Miele", qty: 8, unit: "g" }] },
+  ] } };
+  const meal = { id: "m4", name: "Pausa", time: null, options: [[{ alts: [{ recipe: "r3" }] }, { alts: [{ recipe: "r3" }] }]] };
+  const p = new SharedDietPanel();
+  p._render = () => {};
+  p._recipes = R;
+  p._draft = plain({ id: "p1", name: "Luca", person: null, reminder: { enabled: false, minutes: 15, notify: null },
+    week: {}, exceptions: {}, choices: { defaults: {}, dates: {} }, rev: 1, recipe_qty: {} });
+  const html = p._choiceEditor("", meal, { option: 0, lines: {} });
+  assert.equal((html.match(/data-rid="r3" data-iid="i8"/g) ?? []).length, 1);
+  assert.equal((html.match(/data-ch="cing"/g) ?? []).length, 1);
+}
+
+{
   // Food suggestions include the alternatives of recipe ingredients.
   const p = new SharedDietPanel();
   p._recipes = RECIPES;

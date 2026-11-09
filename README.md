@@ -38,7 +38,7 @@ Le ricette sono piatti composti da ingredienti, salvati una volta sola e usabili
 ### Alternative negli ingredienti
 
 - **Scheda Ricette**: ogni ingrediente può avere più alimenti alternativi, separati da "OPPURE". Usa "+ OPPURE" per aggiungerne uno; la prima alternativa è quella predefinita.
-- **Scelta in Scelte**: per ogni ricetta del pasto compare una tendina "Nome ricetta · Ingrediente N" con le alternative. Il predefinito vale per tutte le date; "Ritocca per questa data" permette di cambiarla solo per un giorno. Se non scegli nulla, si usa la prima alternativa.
+- **Scelta in Scelte**: compare una tendina per ogni ingrediente con alternative delle ricette del percorso scelto, con nome "Nome ricetta · Ingrediente N". Il predefinito vale per tutte le date; "Ritocca per questa data" permette di cambiarla solo per un giorno. Se non scegli nulla, si usa la prima alternativa.
 - **Grammature per alternativa**: ogni alternativa ha la sua grammatura. Nella tendina e nei pasti compare la grammatura della persona, cioè quella personalizzata se presente, altrimenti il default dell'alternativa.
 
 ## Sensori

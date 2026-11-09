@@ -1087,13 +1087,19 @@ class SharedDietPanel extends HTMLElement {
     // Whole-meal options are no longer offered in the editor; the selector only shows for meals that still have several.
     const optSel = m.options.length > 1 ? `<label class="sub-row">Opzione <select data-ch="copt" ${attrs}>${opts}</select></label>` : "";
     // Ingredient alternatives of the recipes on the chosen path: "<Ricetta> · Ingrediente N" (N = position in the recipe).
-    const recipeSels = items.flatMap((it) => (it.choices ?? []).map((ch) => {
-      const n = recipeOf(it.recipe, this._recipes).ingredients.findIndex((g) => g.id === ch.ingredient_id) + 1;
-      return `<label class="sub-row">${esc(it.food)} · Ingrediente ${n}
-        <select data-ch="cing" ${attrs} data-rid="${esc(it.recipe)}" data-iid="${esc(ch.ingredient_id)}">${ch.alts.map((a) =>
-          `<option value="${esc(a.id)}"${a.id === ch.chosen ? " selected" : ""}>${esc(fmtItem({ ...a, note: "" }))}</option>`).join("")}</select>
-      </label>`;
-    })).join("");
+    // A recipe on two lines shares its choices (keyed by recipe and ingredient): one set of selects per recipe.
+    const seenRecipes = new Set();
+    const recipeSels = items.flatMap((it) => {
+      if (seenRecipes.has(it.recipe)) return [];
+      seenRecipes.add(it.recipe);
+      return (it.choices ?? []).map((ch) => {
+        const n = recipeOf(it.recipe, this._recipes).ingredients.findIndex((g) => g.id === ch.ingredient_id) + 1;
+        return `<label class="sub-row">${esc(it.food)} · Ingrediente ${n}
+          <select data-ch="cing" ${attrs} data-rid="${esc(it.recipe)}" data-iid="${esc(ch.ingredient_id)}">${ch.alts.map((a) =>
+            `<option value="${esc(a.id)}"${a.id === ch.chosen ? " selected" : ""}>${esc(fmtItem({ ...a, note: "" }))}</option>`).join("")}</select>
+        </label>`;
+      });
+    }).join("");
     return optSel + lines + recipeSels;
   }
 
@@ -1154,6 +1160,7 @@ class SharedDietPanel extends HTMLElement {
               data-f="unit" ${at}>
           </div>`;
         }).join("")}
+        ${g.alts.length > 1 ? `<p class="muted">La prima è la predefinita</p>` : ""}
         <div class="row">
           <button data-act="raddalt" data-i="${k}">+ OPPURE</button>
           <button class="danger" data-act="rdelingr" data-i="${k}">Rimuovi ingrediente</button>
