@@ -47,7 +47,11 @@ input, select { padding: 6px 8px; min-width: 0; max-width: 100%; border: 1px sol
 .sub { margin: 8px 0 4px; font-size: 12px; color: var(--secondary-text-color, #727272);
   text-transform: uppercase; letter-spacing: 0.04em; }
 .option { border-top: 1px dashed var(--divider-color, #e0e0e0); margin-top: 10px; padding-top: 8px; }
-.line { border-left: 3px solid var(--divider-color, #e0e0e0); padding-left: 8px; margin: 8px 0; }
+.line { border-left: 4px solid var(--primary-color, #03a9f4); border-radius: 8px; padding: 6px 8px; margin: 10px 0;
+  background: rgba(127, 127, 127, 0.08); }
+.line-head { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--primary-color, #03a9f4); margin-bottom: 2px; }
+.summary { margin: 4px 0 0; }
 .item { display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 6px; margin: 4px 0; }
 .item .food { grid-column: 1 / 4; }
 .or { font-size: 12px; font-weight: 600; text-align: center; color: var(--secondary-text-color, #727272); }
@@ -188,6 +192,7 @@ class SharedDietPanel extends HTMLElement {
     this._base = null; // server copy the draft was taken from: the "original" for three-way merges
     this._dirty = false;
     this._newName = ""; // new-profile name, kept across re-renders
+    this._collapsed = new Set(); // meal ids folded in the editors (view-only, not saved)
     this._busy = false;
     this._msg = null; // {ok, text}
     this._narrow = false;
@@ -421,6 +426,10 @@ class SharedDietPanel extends HTMLElement {
       this._msg = null;
       return this._render();
     }
+    if (d.act === "fold") {
+      if (!this._collapsed.delete(d.mid)) this._collapsed.add(d.mid);
+      return this._render();
+    }
     if (this._busy && d.act !== "menu") return; // nothing may change while a save is in flight
     switch (d.act) {
       case "menu":
@@ -614,7 +623,7 @@ class SharedDietPanel extends HTMLElement {
     if (!meals.length) return `<p class="muted">Nessun pasto.</p>`;
     return meals.map((m) => {
       const r = resolveMeal(m, choiceFor(p, s, m.id));
-      const alts = m.options.map((opt, oi) => `<li class="${oi === r.option ? "" : "muted"}">Opzione ${oi + 1}: ${
+      const alts = m.options.map((opt, oi) => `<li class="${oi === r.option ? "" : "muted"}">${m.options.length > 1 ? `Opzione ${oi + 1}: ` : ""}${
         opt.map((l) => l.alts.map((a) => esc(fmtItem(a))).join(" / ")).join(" + ")}</li>`).join("");
       return `<section class="card">
         <div class="meal-head"><strong>${esc(m.name)}</strong><span class="muted">${esc(m.time ?? "senza orario")}</span></div>
@@ -703,11 +712,13 @@ class SharedDietPanel extends HTMLElement {
       if (line.alts.length < 2) return "";
       const want = choice.lines[String(li)] ?? 0;
       const sel = want >= 0 && want < line.alts.length ? want : 0;
-      return `<label class="sub-row">Riga ${li + 1}
+      return `<label class="sub-row">Alimento ${li + 1}
         <select data-ch="cline" ${attrs} data-l="${li}">${line.alts.map((a, ai) => `<option value="${ai}"${ai === sel ? " selected" : ""}>${esc(a.food)}</option>`).join("")}</select>
       </label>`;
     }).join("");
-    return `<label class="sub-row">Opzione <select data-ch="copt" ${attrs}>${opts}</select></label>${lines}`;
+    // Whole-meal options are no longer offered in the editor; the selector only shows for meals that still have several.
+    const optSel = m.options.length > 1 ? `<label class="sub-row">Opzione <select data-ch="copt" ${attrs}>${opts}</select></label>` : "";
+    return optSel + lines;
   }
 
   _vShop() {
@@ -767,14 +778,21 @@ class SharedDietPanel extends HTMLElement {
 
   _mealCard(ctx, m, i, n) {
     const at = `data-ctx="${esc(ctx)}" data-i="${i}"`;
-    return `<section class="card">
-      <div class="row">
+    const folded = this._collapsed.has(m.id);
+    const head = `<div class="row">
         <input class="grow" value="${esc(m.name)}" data-ch="meal" data-f="name" ${at} aria-label="Nome pasto">
         <input type="time" value="${esc(m.time ?? "")}" data-ch="meal" data-f="time" ${at} aria-label="Orario">
-      </div>
+        <button class="icon" data-act="fold" data-mid="${esc(m.id)}" aria-expanded="${!folded}"
+          aria-label="${folded ? "Espandi pasto" : "Comprimi pasto"}">${folded ? "▸" : "▾"}</button>
+      </div>`;
+    if (folded) {
+      const foods = m.options.flat().map((l) => l.alts.map((a) => a.food.trim()).filter(Boolean).join(" / ")).filter(Boolean);
+      return `<section class="card">${head}
+        <p class="muted summary">${foods.length ? esc(foods.join(" · ")) : "Nessun alimento"}</p></section>`;
+    }
+    return `<section class="card">${head}
       ${m.options.map((opt, oi) => this._optionEditor(ctx, i, oi, opt, m.options.length)).join("")}
       <div class="row">
-        <button data-act="addopt" ${at}>+ Opzione</button>
         <button data-act="up" ${at}${i === 0 ? " disabled" : ""} aria-label="Sposta su">↑</button>
         <button data-act="down" ${at}${i === n - 1 ? " disabled" : ""} aria-label="Sposta giù">↓</button>
         <button class="danger" data-act="delmeal" ${at}>Elimina pasto</button>
@@ -785,6 +803,7 @@ class SharedDietPanel extends HTMLElement {
   _optionEditor(ctx, i, oi, opt, nOptions) {
     const at = `data-ctx="${esc(ctx)}" data-i="${i}" data-o="${oi}"`;
     const lines = opt.map((line, li) => `<div class="line">
+        <div class="line-head">Alimento ${li + 1}</div>
         ${line.alts.map((a, ai) => `${ai ? `<div class="or">OPPURE</div>` : ""}
           <div class="item">
             <input class="food" list="foods" value="${esc(a.food)}" placeholder="Alimento" aria-label="Alimento"
@@ -799,16 +818,18 @@ class SharedDietPanel extends HTMLElement {
           </div>`).join("")}
         <div class="row">
           <button data-act="addalt" ${at} data-l="${li}">+ OPPURE</button>
-          <button class="danger" data-act="delline" ${at} data-l="${li}">Rimuovi riga</button>
+          <button class="danger" data-act="delline" ${at} data-l="${li}">Rimuovi alimento</button>
         </div>
       </div>`).join("");
-    return `<div class="option">
-      <div class="row">
+    // Single option (the only kind the editor creates now): no option header. Meals saved earlier with several keep theirs.
+    const header = nOptions > 1 ? `<div class="row">
         <strong class="grow">Opzione ${oi + 1}</strong>
-        ${nOptions > 1 ? `<button class="danger" data-act="delopt" ${at}>Rimuovi opzione</button>` : ""}
-      </div>
+        <button class="danger" data-act="delopt" ${at}>Rimuovi opzione</button>
+      </div>` : "";
+    return `<div${nOptions > 1 ? ` class="option"` : ""}>
+      ${header}
       ${lines}
-      <button data-act="addline" ${at}>+ Riga</button>
+      <button data-act="addline" ${at}>+ Alimento</button>
     </div>`;
   }
 }
