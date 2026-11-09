@@ -113,7 +113,9 @@ const foldText = (s) => s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().
 const foodSel = (ctx, i, o, l, a) =>
   `input.food[data-ctx="${ctx}"][data-i="${i}"][data-o="${o}"][data-l="${l}"][data-a="${a}"]`;
 const zeroChoice = () => ({ option: 0, lines: {} });
-const hasChoice = (m) => m.options.length > 1 || m.options.some((o) => o.some((l) => l.alts.length > 1));
+// A meal offers choices with several options or lines, or with a recipe that has an ingredient with alternatives.
+const hasChoice = (m, recipes) => m.options.length > 1 || m.options.some((o) => o.some((l) => l.alts.length > 1
+  || l.alts.some((a) => "recipe" in a && recipeOf(a.recipe, recipes)?.ingredients.some((g) => g.alts.length > 1))));
 
 // Mirrors model.py: effective day, choice priority, option/alternative resolution.
 const effectiveDay = (p, s) => p.exceptions[s] ?? p.week[String(weekday(s))];
@@ -903,7 +905,13 @@ class SharedDietPanel extends HTMLElement {
       }
       case "cline":
         this._choiceSlot(d.date, d.mid, true).lines[d.l] = Number(el.value);
-        return this._markDirty();
+        return this._edit(); // the recipes on the chosen path can change
+      case "cing": {
+        const c = this._choiceSlot(d.date, d.mid, true);
+        (c.recipes ??= {})[d.rid] ??= {};
+        c.recipes[d.rid][d.iid] = el.value;
+        return this._edit();
+      }
     }
   }
 
@@ -1037,7 +1045,7 @@ class SharedDietPanel extends HTMLElement {
     else if (span(from, to) > MAX_SPAN) cards = `<p class="msg err">Intervallo massimo di ${MAX_SPAN} giorni.</p>`;
     else {
       for (let s = from; s <= to; s = addDays(s, 1)) {
-        for (const m of effectiveDay(this._draft, s)) if (hasChoice(m)) cards += this._choiceCard(s, m);
+        for (const m of effectiveDay(this._draft, s)) if (hasChoice(m, this._recipes)) cards += this._choiceCard(s, m);
       }
       if (!cards) cards = `<p class="muted">Nessun pasto con alternative nell'intervallo.</p>`;
     }
@@ -1064,7 +1072,7 @@ class SharedDietPanel extends HTMLElement {
   }
 
   _choiceEditor(date, m, choice) {
-    const { option } = resolveMeal(m, choice, this._draft, this._recipes);
+    const { option, items } = resolveMeal(m, choice, this._draft, this._recipes);
     const attrs = `data-date="${esc(date)}" data-mid="${esc(m.id)}"`;
     const opts = m.options.map((o, oi) => `<option value="${oi}"${oi === option ? " selected" : ""}>Opzione ${oi + 1}: ${
       esc(o.map((l) => l.alts.map((a) => itemLabel(a, this._recipes)).join(" / ")).join(" + "))}</option>`).join("");
@@ -1078,7 +1086,15 @@ class SharedDietPanel extends HTMLElement {
     }).join("");
     // Whole-meal options are no longer offered in the editor; the selector only shows for meals that still have several.
     const optSel = m.options.length > 1 ? `<label class="sub-row">Opzione <select data-ch="copt" ${attrs}>${opts}</select></label>` : "";
-    return optSel + lines;
+    // Ingredient alternatives of the recipes on the chosen path: "<Ricetta> · Ingrediente N" (N = position in the recipe).
+    const recipeSels = items.flatMap((it) => (it.choices ?? []).map((ch) => {
+      const n = recipeOf(it.recipe, this._recipes).ingredients.findIndex((g) => g.id === ch.ingredient_id) + 1;
+      return `<label class="sub-row">${esc(it.food)} · Ingrediente ${n}
+        <select data-ch="cing" ${attrs} data-rid="${esc(it.recipe)}" data-iid="${esc(ch.ingredient_id)}">${ch.alts.map((a) =>
+          `<option value="${esc(a.id)}"${a.id === ch.chosen ? " selected" : ""}>${esc(fmtItem({ ...a, note: "" }))}</option>`).join("")}</select>
+      </label>`;
+    })).join("");
+    return optSel + lines + recipeSels;
   }
 
   _vShop() {

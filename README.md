@@ -18,7 +18,7 @@ Dopo l'installazione compare **Dieta** nella barra laterale. Le schede sono:
 - **Oggi**: pasti di oggi del profilo selezionato, con le scelte applicate. "Vedi alternative" mostra tutte le opzioni.
 - **Settimana**: pasti di ogni giorno della settimana. Aggiungi, rimuovi o riordina i pasti; ogni pasto ha opzioni (A, B, …) fatte di righe, e ogni riga può avere alternative ("OPPURE"). Il campo alimento suggerisce i nomi già usati in tutti i profili.
 - **Date**: crea un'eccezione per una data specifica (copia il giorno della settimana, mantenendo le scelte), modificala o eliminala.
-- **Scelte**: per un intervallo di date, scegli l'opzione e l'alternativa di ogni pasto. Il predefinito vale per tutte le date; "Ritocca per questa data" cambia solo quel giorno.
+- **Scelte**: per un intervallo di date, scegli l'opzione e l'alternativa di ogni pasto. Il predefinito vale per tutte le date; "Ritocca per questa data" cambia solo quel giorno. Le ricette del percorso scelto mostrano anche le tendine delle loro alternative ingrediente (vedi sotto).
 - **Ricette**: il ricettario condiviso, da cui si aggiungono ricette ai pasti (vedi sotto).
 - **Spesa**: sceglie intervallo di date e profili, poi aggiunge gli alimenti alla lista To-do selezionata (quantità sommate per alimento e unità).
 - **Profili**: crea, rinomina ed elimina profili; collega una persona; configura il promemoria (minuti prima del pasto e servizio di notifica).
@@ -34,6 +34,12 @@ Le ricette sono piatti composti da ingredienti, salvati una volta sola e usabili
 - **Grammature per persona**: ogni persona può avere grammature diverse dal default della ricetta. La grammatura personalizzata vale per tutti i pasti di quella persona in cui compare la ricetta. Lascia il campo vuoto per usare il default; "Ripristina default" annulla la personalizzazione.
 - **Spesa**: la lista della spesa include gli ingredienti delle ricette, con le grammature della persona.
 - **Alimento semplice**: "Usa alimento semplice" riporta il pasto a un alimento normale, da compilare a mano.
+
+### Alternative negli ingredienti
+
+- **Scheda Ricette**: ogni ingrediente può avere più alimenti alternativi, separati da "OPPURE". Usa "+ OPPURE" per aggiungerne uno; la prima alternativa è quella predefinita.
+- **Scelta in Scelte**: per ogni ricetta del pasto compare una tendina "Nome ricetta · Ingrediente N" con le alternative. Il predefinito vale per tutte le date; "Ritocca per questa data" permette di cambiarla solo per un giorno. Se non scegli nulla, si usa la prima alternativa.
+- **Grammature per alternativa**: ogni alternativa ha la sua grammatura. Nella tendina e nei pasti compare la grammatura della persona, cioè quella personalizzata se presente, altrimenti il default dell'alternativa.
 
 ## Sensori
 

@@ -367,4 +367,61 @@ const RECIPES = {
   assert.ok(p._foodNames().has("latte") && p._foodNames().has("soia"));
 }
 
+{
+  // Scelte: a recipe on the chosen path gets one select per ingredient with 2+ alternatives; other recipes get none.
+  const R = { ...RECIPES, r3: { id: "r3", name: "Caffè freddo", note: "", rev: 1, ingredients: [
+    { id: "i7", alts: [{ id: "a7", food: "Ghiaccio", qty: 5, unit: "pz" }] },
+    { id: "i8", alts: [{ id: "a8", food: "Zucchero", qty: 10, unit: "g" }, { id: "a9", food: "Miele", qty: 8, unit: "g" }] },
+  ] } };
+  const meal = { id: "m3", name: "Colazione", time: null, options: [[{ alts: [{ recipe: "r2" }, { recipe: "r3" }] }]] };
+  const profile = { id: "p1", name: "Luca", person: null, reminder: { enabled: false, minutes: 15, notify: null },
+    week: {}, exceptions: {}, choices: { defaults: {}, dates: {} }, rev: 1, recipe_qty: { r2: { a5: 90 } } };
+  const p = new SharedDietPanel();
+  p._render = () => {};
+  p._recipes = R;
+  p._draft = plain(profile);
+
+  const r2Path = p._choiceEditor("", meal, { option: 0, lines: {} });
+  assert.match(r2Path, /data-ch="cing" data-date="" data-mid="m3" data-rid="r2" data-iid="i4"/);
+  assert.match(r2Path, /Cappuccino · Ingrediente 1/);
+  assert.match(r2Path, /<option value="a4" selected>Latte 100 ml<\/option><option value="a5">Soia 90 ml<\/option>/); // grams of this person
+  assert.doesNotMatch(r2Path, /data-rid="r3"/);
+  assert.doesNotMatch(r2Path, /undefined|NaN/);
+
+  const r3Path = p._choiceEditor("", meal, { option: 0, lines: { 0: 1 } });
+  assert.match(r3Path, /data-rid="r3" data-iid="i8"/);
+  assert.match(r3Path, /Caffè freddo · Ingrediente 2/);
+  assert.match(r3Path, /<option value="a8" selected>Zucchero 10 g<\/option><option value="a9">Miele 8 g<\/option>/);
+  assert.doesNotMatch(r3Path, /data-rid="r2"/);
+
+  // cing writes choices.defaults[mid].recipes[rid][iid]; a per-date override writes into choices.dates[date][mid].
+  p._onChange({ target: { value: "a9", type: "select-one", dataset: { ch: "cing", date: "", mid: "m3", rid: "r3", iid: "i8" } } });
+  assert.equal(p._draft.choices.defaults.m3.recipes.r3.i8, "a9");
+  p._draft.choices.dates["2026-11-10"] = { m3: { option: 0, lines: {} } };
+  p._onChange({ target: { value: "a5", type: "select-one", dataset: { ch: "cing", date: "2026-11-10", mid: "m3", rid: "r2", iid: "i4" } } });
+  assert.equal(p._draft.choices.dates["2026-11-10"].m3.recipes.r2.i4, "a5");
+  assert.equal(p._draft.choices.defaults.m3.recipes.r2, undefined);
+  const override = p._choiceEditor("2026-11-10", meal, p._draft.choices.dates["2026-11-10"].m3);
+  assert.match(override, /data-date="2026-11-10" data-mid="m3" data-rid="r2" data-iid="i4"/);
+  assert.match(override, /<option value="a5" selected>Soia 90 ml<\/option>/);
+
+  // Changing a line alternative re-renders, so the recipe selects follow the chosen path.
+  let renders = 0;
+  p._render = () => { renders += 1; };
+  p._onChange({ target: { value: "1", type: "select-one", dataset: { ch: "cline", date: "", mid: "m3", l: "0" } } });
+  assert.equal(renders, 1);
+  assert.equal(p._draft.choices.defaults.m3.lines["0"], 1);
+
+  // A meal whose only choice is inside a recipe still gets a card in Scelte.
+  p._render = () => {};
+  const solo = { ...meal, options: [[{ alts: [{ recipe: "r3" }] }]] };
+  const all = {}; for (let d = 0; d < 7; d++) all[d] = [solo];
+  p._draft = plain({ ...profile, week: all, choices: { defaults: {}, dates: {} } });
+  p._profiles = { p1: p._draft };
+  p._profileId = "p1";
+  p._view = "choices";
+  p._range = { from: "2026-11-10", to: "2026-11-10" };
+  assert.match(p._body(), /Caffè freddo · Ingrediente 2/);
+}
+
 console.log("resolve.test.mjs: all assertions passed");
