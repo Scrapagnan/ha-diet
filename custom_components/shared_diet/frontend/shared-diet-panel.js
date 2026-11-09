@@ -55,6 +55,7 @@ input, select { padding: 6px 8px; min-width: 0; max-width: 100%; border: 1px sol
 .muted { color: var(--secondary-text-color, #727272); font-size: 14px; }
 .msg { padding: 8px 12px; border-radius: 8px; margin: 8px 0; }
 .msg.ok { background: rgba(67, 160, 71, 0.15); }
+.msg.info { background: rgba(3, 169, 244, 0.15); }
 .msg.err { background: rgba(219, 68, 55, 0.15); color: var(--error-color, #db4437); }
 .savebar { position: sticky; top: 0; z-index: 1; display: flex; justify-content: space-between; align-items: center;
   gap: 8px; padding: 8px 0; background: var(--primary-background-color, #fafafa);
@@ -179,7 +180,9 @@ class SharedDietPanel extends HTMLElement {
     this._loadError = "";
     this._profileId = null;
     this._draft = null; // editable copy of the selected profile
+    this._base = null; // server copy the draft was taken from: the "original" for three-way merges
     this._dirty = false;
+    this._newName = ""; // new-profile name, kept across re-renders
     this._busy = false;
     this._msg = null; // {ok, text}
     this._narrow = false;
@@ -190,6 +193,7 @@ class SharedDietPanel extends HTMLElement {
     this._shop = { from: today, to: addDays(today, 6), off: new Set(), todo: "", items: null };
     this.shadowRoot.addEventListener("click", (e) => this._onClick(e));
     this.shadowRoot.addEventListener("change", (e) => this._onChange(e));
+    this.shadowRoot.addEventListener("input", (e) => this._onInput(e));
   }
 
   set hass(hass) {
@@ -231,11 +235,29 @@ class SharedDietPanel extends HTMLElement {
       this._draft = null;
       this._dirty = false;
     }
-    if (this._profileId && !(this._dirty && this._draft)) {
-      this._draft = clone(profiles[this._profileId]);
-      this._dirty = false;
+    if (this._profileId && !this._dirty) this._load(profiles[this._profileId]);
+    // A dirty editor is only annotated: re-rendering it would drop focus and the caret mid-typing.
+    if (this._dirty && ["week", "dates", "choices", "profiles"].includes(this._view)) {
+      const el = this.shadowRoot.getElementById("notice");
+      if (el) {
+        el.innerHTML = this._noticeHtml();
+        return;
+      }
     }
     this._render();
+  }
+
+  _load(profile) {
+    this._draft = clone(profile);
+    this._base = clone(profile);
+    this._dirty = false;
+  }
+
+  _noticeHtml() {
+    const server = this._profiles[this._profileId];
+    return this._dirty && this._draft && server && server.rev > this._draft.rev
+      ? `<p class="msg info" role="status">Un altro utente ha modificato questo profilo; al salvataggio le modifiche verranno unite</p>`
+      : "";
   }
 
   // ---- state helpers -------------------------------------------------------
@@ -248,8 +270,7 @@ class SharedDietPanel extends HTMLElement {
     if (id === this._profileId) return;
     if (!this._canDiscard()) return this._render();
     this._profileId = id;
-    this._draft = clone(this._profiles[id]);
-    this._dirty = false;
+    this._load(this._profiles[id]);
     this._msg = null;
     this._render();
   }
@@ -276,8 +297,8 @@ class SharedDietPanel extends HTMLElement {
     this._msg = null;
     this._render();
     try {
-      await fn();
-      this._msg = okText ? { ok: true, text: okText } : null;
+      const done = (await fn()) || okText;
+      this._msg = done ? { ok: true, text: done } : null;
     } catch (err) {
       this._msg = { ok: false, text: err?.message || "Operazione non riuscita" };
     } finally {
@@ -289,32 +310,46 @@ class SharedDietPanel extends HTMLElement {
   _save() {
     const id = this._profileId;
     return this._run(async () => {
-      const profile = cleanProfile(this._draft);
-      try {
-        const res = await this._hass.callWS({ type: "shared_diet/save_profile", profile });
-        this._draft = clone(res.profile);
-        this._dirty = false;
-      } catch (err) {
-        if (err?.code === "conflict") {
-          // Someone else saved first: drop the local copy and use the latest subscribed data.
-          this._draft = this._profiles[id] ? clone(this._profiles[id]) : null;
-          this._dirty = false;
-          throw new Error("Modificato da un altro utente, dati ricaricati");
+      let profile = cleanProfile(this._draft);
+      let note = "";
+      let retried = false;
+      for (;;) {
+        try {
+          const res = await this._hass.callWS({ type: "shared_diet/save_profile", profile });
+          this._load(res.profile);
+          return note;
+        } catch (err) {
+          if (err?.code !== "conflict") throw err;
+          const theirs = this._profiles[id];
+          if (retried || !theirs) {
+            // Second conflict (or no server copy): drop the local edits and show the latest server data.
+            if (theirs) this._load(theirs);
+            else {
+              this._draft = null;
+              this._base = null;
+              this._dirty = false;
+            }
+            throw new Error("Modificato da un altro utente, dati ricaricati");
+          }
+          retried = true;
+          const { merged, overlaps } = mergeProfiles(this._base, profile, theirs);
+          profile = merged;
+          note = "Un altro utente ha modificato il profilo: modifiche unite"
+            + (overlaps.length ? `; conflitti su: ${overlaps.join(", ")}, tenuta la versione dell'altro utente` : "");
         }
-        throw err;
       }
     }, "Salvato");
   }
 
   _createProfile() {
-    const name = this.shadowRoot.querySelector("[data-newname]")?.value.trim();
+    const name = this._newName.trim();
     if (!name) return this._flash("Inserisci un nome per il profilo");
     if (!this._canDiscard()) return;
     return this._run(async () => {
       const res = await this._hass.callWS({ type: "shared_diet/create_profile", name });
       this._profileId = res.profile.id;
-      this._draft = clone(res.profile);
-      this._dirty = false;
+      this._load(res.profile);
+      this._newName = "";
     }, "Profilo creato");
   }
 
@@ -326,6 +361,7 @@ class SharedDietPanel extends HTMLElement {
       if (this._profileId === id) {
         this._profileId = null;
         this._draft = null;
+        this._base = null;
         this._dirty = false;
       }
     }, "Profilo eliminato");
@@ -451,6 +487,14 @@ class SharedDietPanel extends HTMLElement {
     }
   }
 
+  // Typing updates the draft without re-rendering, so a push from another user cannot wipe it.
+  _onInput(e) {
+    const el = e.target;
+    if (this._busy || el.tagName !== "INPUT") return;
+    if ("newname" in el.dataset) this._newName = el.value;
+    else if (["pfield", "meal", "item"].includes(el.dataset.ch) && el.type !== "checkbox") this._onChange(e);
+  }
+
   _onChange(e) {
     const el = e.target;
     const d = el.dataset;
@@ -530,7 +574,7 @@ class SharedDietPanel extends HTMLElement {
       choices: () => this._vChoices(), shop: () => this._vShop(), profiles: () => this._vProfiles(),
     };
     const msg = this._msg ? `<div class="msg ${this._msg.ok ? "ok" : "err"}" role="status">${esc(this._msg.text)}</div>` : "";
-    return msg + views[this._view]() + this._datalists();
+    return msg + `<div id="notice">${this._noticeHtml()}</div>` + views[this._view]() + this._datalists();
   }
 
   _picker() {
@@ -682,7 +726,7 @@ class SharedDietPanel extends HTMLElement {
 
   _vProfiles() {
     const head = `<h2>Profili</h2>
-      <div class="row"><input data-newname placeholder="Nome del nuovo profilo" aria-label="Nome nuovo profilo">
+      <div class="row"><input data-newname value="${esc(this._newName)}" placeholder="Nome del nuovo profilo" aria-label="Nome nuovo profilo">
         <button data-act="create">Crea profilo</button></div>`;
     const p = this._draft;
     if (!p) return head;
