@@ -60,6 +60,7 @@ input, select { padding: 6px 8px; min-width: 0; max-width: 100%; border: 1px sol
 .sugg button:last-child { border-bottom: 0; }
 .item { display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 6px; margin: 4px 0; }
 .item .food { grid-column: 1 / 4; }
+.item [data-f="qty"] { grid-column: 1; } /* always start a new row, with or without the × button */
 .or { font-size: 12px; font-weight: 600; text-align: center; color: var(--secondary-text-color, #727272); }
 .chips { display: flex; gap: 4px; }
 .muted { color: var(--secondary-text-color, #727272); font-size: 14px; }
@@ -205,7 +206,6 @@ class SharedDietPanel extends HTMLElement {
     this._newName = ""; // new-profile name, kept across re-renders
     this._collapsed = new Set(); // meal ids folded in the editors (view-only, not saved)
     this._busy = false;
-    this._msg = null; // {ok, text}
     this._narrow = false;
     this._showAlts = false;
     this._date = today; // Date view
@@ -282,6 +282,7 @@ class SharedDietPanel extends HTMLElement {
   disconnectedCallback() {
     this._unsub?.then((unsub) => unsub?.(), () => {});
     this._unsub = null;
+    document.getElementById("shared-diet-error")?.remove(); // don't leave it over other HA pages
   }
 
   _subscribe() {
@@ -338,7 +339,6 @@ class SharedDietPanel extends HTMLElement {
     if (!this._canDiscard()) return this._render();
     this._profileId = id;
     this._load(this._profiles[id]);
-    this._msg = null;
     this._render();
   }
 
@@ -353,23 +353,34 @@ class SharedDietPanel extends HTMLElement {
     if (el) el.textContent = "Modifiche non salvate";
   }
 
+  // Errors: red toast, 8 s or until tapped. HA's own toast (used for success) has no error style.
+  // Lives in document.body so panel re-renders don't remove it; textContent keeps it XSS-safe.
   _flash(text) {
-    this._msg = { ok: false, text };
-    this._render();
+    clearTimeout(this._errTimer);
+    document.getElementById("shared-diet-error")?.remove();
+    const t = Object.assign(document.createElement("div"), { id: "shared-diet-error", role: "alert", textContent: text });
+    Object.assign(t.style, {
+      position: "fixed", left: "50%", bottom: "24px", transform: "translateX(-50%)", zIndex: 10000,
+      maxWidth: "min(560px, calc(100vw - 32px))", padding: "12px 16px", borderRadius: "8px", cursor: "pointer",
+      background: "var(--error-color, #db4437)", color: "#fff", boxShadow: "0 3px 10px rgba(0,0,0,.35)",
+      font: "14px var(--paper-font-body1_-_font-family, Roboto, sans-serif)",
+    });
+    t.onclick = () => t.remove();
+    document.body.append(t);
+    this._errTimer = setTimeout(() => t.remove(), 8000);
   }
 
   async _run(fn, okText = "") {
     if (this._busy) return;
     this._busy = true;
-    this._msg = null;
     this._render();
     try {
       const done = (await fn()) || okText;
-      // Success goes to HA's own toast (auto-closing); errors stay inline at the top until the next action.
+      // Success goes to HA's own toast (auto-closing).
       if (done) this.dispatchEvent(new CustomEvent("hass-notification", {
         detail: { message: done, duration: done === okText ? 3000 : 6000 }, bubbles: true, composed: true }));
     } catch (err) {
-      this._msg = { ok: false, text: err?.message || "Operazione non riuscita" };
+      this._flash(err?.message || "Operazione non riuscita");
     } finally {
       this._busy = false;
       this._render();
@@ -482,7 +493,6 @@ class SharedDietPanel extends HTMLElement {
     const d = el.dataset;
     if (d.tab) {
       this._view = d.tab;
-      this._msg = null;
       return this._render();
     }
     if (d.act === "fold") {
@@ -664,8 +674,7 @@ class SharedDietPanel extends HTMLElement {
       today: () => this._vToday(), week: () => this._vWeek(), dates: () => this._vDates(),
       choices: () => this._vChoices(), shop: () => this._vShop(), profiles: () => this._vProfiles(),
     };
-    const msg = this._msg ? `<div class="msg ${this._msg.ok ? "ok" : "err"}" role="status">${esc(this._msg.text)}</div>` : "";
-    return msg + `<div id="notice">${this._noticeHtml()}</div>` + views[this._view]() + this._datalists();
+    return `<div id="notice">${this._noticeHtml()}</div>` + views[this._view]() + this._datalists();
   }
 
   _picker() {
