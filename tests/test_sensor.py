@@ -138,10 +138,10 @@ async def test_malformed_profile_does_not_skip_others(hass, freezer, monkeypatch
 
     real_resolve = integration.resolve_meal
 
-    def flaky_resolve(meal, choice):
+    def flaky_resolve(meal, choice, *args):
         if meal["id"] == "bad":
             raise RuntimeError("corrupt meal")
-        return real_resolve(meal, choice)
+        return real_resolve(meal, choice, *args)
 
     monkeypatch.setattr(integration, "resolve_meal", flaky_resolve)
     calls = async_mock_service(hass, "notify", "mobile_app_x")
@@ -169,3 +169,60 @@ async def test_renaming_profile_updates_friendly_name_not_entity_id(hass, freeze
     assert state is not None
     assert state.attributes["friendly_name"] == "Marco pasto attuale"
     assert hass.states.get("sensor.marco_pasto_attuale") is None
+
+
+async def _setup_pancake(hass, notify=None):
+    """Luca eats a Pancake recipe at 13:00; his Farina is overridden to 40 g (default 60 g)."""
+    store = await _setup_entry(hass)
+    recipe = await store.async_create_recipe("Pancake")
+    recipe["ingredients"] = [
+        {"id": "farina", "food": "Farina", "qty": 60.0, "unit": "g"},
+        {"id": "uova", "food": "Uova", "qty": 1.0, "unit": "pz"},
+    ]
+    recipe = await store.async_save_recipe(recipe)
+    pancake = {
+        "id": "pancake",
+        "name": "Pancake",
+        "time": "13:00",
+        "options": [[{"alts": [{"recipe": recipe["id"]}]}]],
+    }
+    profile_id = await _add_profile(hass, store, "Luca", [COLAZIONE, pancake], notify)
+    profile = store.profiles[profile_id]
+    profile["recipe_qty"] = {recipe["id"]: {"farina": 40.0}}
+    await store.async_save_profile(profile)
+    await hass.async_block_till_done()
+    return store, recipe
+
+
+async def test_sensor_items_expand_recipe_with_profile_override(hass, freezer):
+    freezer.move_to(at(10, 0))
+    await _setup_pancake(hass)
+    nxt = hass.states.get("sensor.luca_prossimo_pasto")
+    assert nxt.attributes["items"] == ["Pancake: Farina 40 g, Uova 1 pz"]
+
+
+async def test_recipe_save_updates_sensor_without_time_tick(hass, freezer):
+    freezer.move_to(at(10, 0))
+    store, recipe = await _setup_pancake(hass)
+    assert hass.states.get("sensor.luca_prossimo_pasto").attributes["items"] == [
+        "Pancake: Farina 40 g, Uova 1 pz"
+    ]
+    recipe = store.recipes[recipe["id"]]
+    recipe["ingredients"][1]["qty"] = 2.0  # Uova has no profile override
+    await store.async_save_recipe(recipe)
+    await hass.async_block_till_done()
+    assert hass.states.get("sensor.luca_prossimo_pasto").attributes["items"] == [
+        "Pancake: Farina 40 g, Uova 2 pz"
+    ]
+
+
+async def test_reminder_message_contains_recipe_text(hass, freezer):
+    calls = async_mock_service(hass, "notify", "mobile_app_x")
+    freezer.move_to(at(10, 0))
+    await _setup_pancake(hass, notify="notify.mobile_app_x")
+    freezer.move_to(at(12, 45))
+    async_fire_time_changed(hass, at(12, 45))
+    await hass.async_block_till_done()
+    assert len(calls) == 1
+    assert calls[0].data["title"] == "Luca: Pancake alle 13:00"
+    assert calls[0].data["message"] == "Pancake: Farina 40 g, Uova 1 pz"

@@ -42,6 +42,7 @@ async def _send_reminders(hass: HomeAssistant, store: DietStore) -> None:
     now = dt_util.now()
     # store.profiles is a deep copy, so this snapshot is safe to use across the awaits below.
     sends: list[tuple[str, dict]] = []
+    recipes = store.recipes
     for profile in store.profiles.values():
         try:
             reminder = profile["reminder"]
@@ -53,7 +54,7 @@ async def _send_reminders(hass: HomeAssistant, store: DietStore) -> None:
             for meal in effective_day(profile, target.date()):
                 if meal["time"] != hhmm:
                     continue
-                resolved = resolve_meal(meal, choice_for(profile, target.date(), meal["id"]))
+                resolved = resolve_meal(meal, choice_for(profile, target.date(), meal["id"]), profile, recipes)
                 sends.append(
                     (
                         service,

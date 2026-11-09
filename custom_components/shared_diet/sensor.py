@@ -45,7 +45,7 @@ class MealSensor(SensorEntity):
         self._meal = None
         if self._profile is not None:
             self._attr_name = self._label(self._profile["name"])
-            self._meal = current_and_next(self._profile, dt_util.now())[self._index]
+            self._meal = current_and_next(self._profile, dt_util.now(), self._store.recipes)[self._index]
         self.async_write_ha_state()
 
     @property
