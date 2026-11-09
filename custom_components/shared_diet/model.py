@@ -96,3 +96,12 @@ def shopping_items(profiles: list[dict], start: date, end: date) -> list[str]:
         if norm not in numeric_foods
     ]
     return [text for _, _, text in sorted(rows)]
+
+
+def format_item(item: dict) -> str:
+    """Display text for a meal item: "Nome 80 g", "Nome (q.b.)" or "Nome"."""
+    if item["qty"] is not None:
+        return f"{item['food']} {item['qty']:g} {item['unit']}"
+    if item["note"]:
+        return f"{item['food']} ({item['note']})"
+    return item["food"]
