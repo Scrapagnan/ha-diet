@@ -58,6 +58,7 @@ input, select { padding: 6px 8px; min-width: 0; max-width: 100%; border: 1px sol
 .sugg button { border: 0; border-radius: 0; text-align: left; padding: 10px 12px; background: none;
   border-bottom: 1px solid var(--divider-color, #e0e0e0); }
 .sugg button:last-child { border-bottom: 0; }
+.sugg button.on { background: var(--primary-color, #03a9f4); color: var(--text-primary-color, #fff); }
 .item { display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 6px; margin: 4px 0; }
 .item .food { grid-column: 1 / 4; }
 .item [data-f="qty"] { grid-column: 1; } /* always start a new row, with or without the × button */
@@ -104,7 +105,7 @@ const fmtItem = (it) => {
   return it.qty !== null ? `${it.food} ${it.qty} ${it.unit}` : it.note ? `${it.food} (${it.note})` : it.food;
 };
 const blankItem = () => ({ food: "", qty: null, unit: "g", note: "" });
-const newMeal = () => ({ id: uid(), name: "Pasto", time: null, options: [[{ alts: [blankItem()] }]] });
+const newMeal = () => ({ id: uid(), name: "", time: null, options: [[{ alts: [blankItem()] }]] });
 // Meal editor context: "w<weekday>" in Settimana, "x<ISO date>" in Date (see _list).
 const isWeekCtx = (ctx) => ctx[0] === "w";
 // Comparison key for food names: case, accents and repeated spaces ignored ("Caffè " ~ "caffe").
@@ -312,6 +313,7 @@ class SharedDietPanel extends HTMLElement {
     // Keep focus in the food field when a suggestion is tapped, so the tap lands as a click.
     for (const ev of ["pointerdown", "mousedown"])
       this.shadowRoot.addEventListener(ev, (e) => { if (e.target.closest(".sugg")) e.preventDefault(); });
+    this.shadowRoot.addEventListener("keydown", (e) => this._suggKey(e));
     this.shadowRoot.addEventListener("focusout", (e) => { if (e.target.classList?.contains("food")) this._hideSugg(); });
   }
 
@@ -353,6 +355,22 @@ class SharedDietPanel extends HTMLElement {
     // After the × button when present, so the list spans the full row under the food field.
     const anchor = input.nextElementSibling?.tagName === "BUTTON" ? input.nextElementSibling : input;
     anchor.insertAdjacentHTML("afterend", `<div class="sugg" role="listbox">${html}</div>`);
+  }
+
+  // Arrows move the highlight in the suggestion list, Enter picks it, Escape closes it. Focus stays in the field.
+  _suggKey(e) {
+    if (e.target !== this._suggFor) return;
+    const btns = [...this.shadowRoot.querySelectorAll(".sugg button")];
+    const cur = btns.findIndex((b) => b.classList.contains("on"));
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const next = e.key === "ArrowDown" ? (cur + 1) % btns.length : (cur <= 0 ? btns.length : cur) - 1;
+      btns.forEach((b, i) => b.classList.toggle("on", i === next));
+      btns[next].scrollIntoView({ block: "nearest" });
+    } else if (e.key === "Enter" && cur >= 0) {
+      e.preventDefault();
+      btns[cur].click();
+    } else if (e.key === "Escape") this._hideSugg();
   }
 
   _hideSugg() {
@@ -1232,7 +1250,7 @@ class SharedDietPanel extends HTMLElement {
     const key = `${ctx}:${m.id}`;
     const folded = isWeekCtx(ctx) !== this._foldToggled.has(key);
     const head = `<div class="row">
-        <input class="grow" value="${esc(m.name)}" data-ch="meal" data-f="name" ${at} aria-label="Nome pasto">
+        <input class="grow" value="${esc(m.name)}" data-ch="meal" data-f="name" ${at} placeholder="Pasto" aria-label="Nome pasto">
         <input type="time" value="${esc(m.time ?? "")}" data-ch="meal" data-f="time" ${at} aria-label="Orario">
         <button class="icon" data-act="fold" data-key="${esc(key)}" aria-expanded="${!folded}"
           aria-label="${folded ? "Espandi pasto" : "Comprimi pasto"}">${folded ? "▸" : "▾"}</button>
