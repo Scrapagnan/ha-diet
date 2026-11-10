@@ -40,10 +40,11 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
 async def _send_reminders(hass: HomeAssistant, store: DietStore) -> None:
     now = dt_util.now()
-    # store.profiles is a deep copy, so this snapshot is safe to use across the awaits below.
+    # The snapshot is replaced, never mutated, on commit: safe to read across the awaits below.
     sends: list[tuple[str, dict]] = []
-    recipes = store.recipes
-    for profile in store.profiles.values():
+    data = store.snapshot()
+    recipes = data["recipes"]
+    for profile in data["profiles"].values():
         try:
             reminder = profile["reminder"]
             if not (reminder["enabled"] and reminder["notify"]):
@@ -105,4 +106,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     frontend.async_remove_panel(hass, PANEL_URL)
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if unloaded:
+        # The websocket commands stay registered; without the store they answer "not_loaded".
+        # Setup reloads the data from disk.
+        hass.data.pop(DOMAIN, None)
+    return unloaded

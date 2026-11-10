@@ -55,8 +55,7 @@ def test_override_on_null_default():
 
 def test_missing_recipe():
     e = expand_item({"recipe": "nope"}, profile(), RECIPES)
-    assert e == {"recipe": "nope", "food": "Ricetta mancante", "note": "", "ingredients": [], "missing": True,
-                 "choices": []}
+    assert e == {"recipe": "nope", "food": "Ricetta mancante", "note": "", "ingredients": [], "missing": True}
 
 
 def test_format_recipe_without_choice_uses_first_alt():
@@ -83,17 +82,12 @@ def test_override_applies_to_chosen_alt_only():
     assert format_item(e) == "Pancake: Farina 60 g, Soia 120 ml"
 
 
-def test_choices_only_for_ingredients_with_several_alts():
-    e = expand_item({"recipe": "r1"}, profile(recipe_qty={"r1": {"a3": 90.0}}), RECIPES, {"i2": "a3"})
-    assert e["choices"] == [{"ingredient_id": "i2",
-                             "alts": [{"id": "a2", "food": "Latte", "qty": 100.0, "unit": "ml"},
-                                      {"id": "a3", "food": "Soia", "qty": 90.0, "unit": "ml"}],
-                             "chosen": "a3"}]
-
-
-def test_choices_chosen_defaults_to_first_alt():
+def test_expansion_does_not_copy_unchosen_alternatives():
+    # Sensors, reminders and shopping resolve every reference: listing all alternatives per reference
+    # multiplied the work by the alternatives count. Only the panel needs them, and it expands on its own.
     e = expand_item({"recipe": "r1"}, profile(), RECIPES)
-    assert e["choices"][0]["chosen"] == "a2"
+    assert "choices" not in e
+    assert [i["food"] for i in e["ingredients"]] == ["Farina", "Latte"]
 
 
 def test_shopping_expands_recipe_and_sums_with_plain_food():

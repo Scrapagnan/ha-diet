@@ -41,11 +41,13 @@ class MealSensor(SensorEntity):
 
     @callback
     def _refresh(self, _now: datetime | None = None) -> None:
-        self._profile = self._store.profiles.get(self._profile_id)
+        # Own profile only, recipes from the shared snapshot: a refresh must not copy the whole store per sensor.
+        self._profile = self._store.profile(self._profile_id)
         self._meal = None
         if self._profile is not None:
             self._attr_name = self._label(self._profile["name"])
-            self._meal = current_and_next(self._profile, dt_util.now(), self._store.recipes)[self._index]
+            recipes = self._store.snapshot()["recipes"]
+            self._meal = current_and_next(self._profile, dt_util.now(), recipes)[self._index]
         self.async_write_ha_state()
 
     @property
@@ -70,15 +72,16 @@ async def async_setup_entry(
     store: DietStore = entry.runtime_data
     registry = er.async_get(hass)
     # Entities of deleted profiles would otherwise stay in the registry as orphans.
+    known = store.snapshot()["profiles"]
     for reg_entry in er.async_entries_for_config_entry(registry, entry.entry_id):
-        if reg_entry.unique_id.rsplit("_", 1)[0] not in store.profiles:
+        if reg_entry.unique_id.rsplit("_", 1)[0] not in known:
             registry.async_remove(reg_entry.entity_id)
 
     sensors: dict[str, tuple[MealSensor, MealSensor]] = {}
 
     @callback
     def _sync_profiles() -> None:
-        profiles = store.profiles
+        profiles = store.snapshot()["profiles"]
         for pid in set(sensors) - set(profiles):
             for sensor in sensors.pop(pid):
                 entity_id = registry.async_get_entity_id(SENSOR_DOMAIN, DOMAIN, sensor.unique_id)

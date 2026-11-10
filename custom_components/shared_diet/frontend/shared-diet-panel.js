@@ -122,10 +122,12 @@ const hasChoice = (m, recipes) => m.options.length > 1 || m.options.some((o) => 
 
 // Mirrors model.py: effective day, choice priority, option/alternative resolution.
 const effectiveDay = (p, s) => p.exceptions[s] ?? p.week[String(weekday(s))];
-const choiceFor = (p, s, mid) => p.choices.dates[s]?.[mid] ?? p.choices.defaults[mid] ?? zeroChoice();
+// Meal ids come from stored data: read only own keys, or "constructor"/"toString" would resolve to Object internals.
+const own = (o, k) => (o && Object.hasOwn(o, k) ? o[k] : undefined);
+const choiceFor = (p, s, mid) => own(own(p.choices.dates, s), mid) ?? own(p.choices.defaults, mid) ?? zeroChoice();
 const recipeOf = (rid, recipes) => (Object.hasOwn(recipes, rid) ? recipes[rid] : null);
 // Mirrors model.py expand_item: a recipe item becomes its name and, per ingredient, the chosen alternative with the person's grams
-// (override by alt id, else default). Ingredients with 2+ alternatives also list them in `choices`.
+// (override by alt id, else default). Ingredients with 2+ alternatives also list them in `choices` (panel only: model.py skips them).
 function expandItem(item, profile, recipes, recipeChoice = {}) {
   if (!("recipe" in item)) return item;
   const recipe = recipeOf(item.recipe, recipes);
@@ -718,9 +720,9 @@ class SharedDietPanel extends HTMLElement {
   // Choice object for a meal: date override when date is set, else the per-meal default.
   _choiceSlot(date, mid, create) {
     const c = this._draft.choices;
-    const holder = date ? (create ? (c.dates[date] ??= {}) : c.dates[date] ?? {}) : c.defaults;
-    if (create) holder[mid] ??= zeroChoice();
-    return holder[mid];
+    const holder = date ? (create ? (c.dates[date] ??= {}) : own(c.dates, date) ?? {}) : c.defaults;
+    if (create && !Object.hasOwn(holder, mid)) holder[mid] = zeroChoice();
+    return own(holder, mid);
   }
 
   // ---- events --------------------------------------------------------------
@@ -783,7 +785,7 @@ class SharedDietPanel extends HTMLElement {
         return this._edit();
       case "ov": {
         const day = (this._draft.choices.dates[d.date] ??= {});
-        day[d.mid] = clone(this._draft.choices.defaults[d.mid] ?? zeroChoice());
+        day[d.mid] = clone(own(this._draft.choices.defaults, d.mid) ?? zeroChoice());
         return this._edit();
       }
       case "clrov": {
@@ -845,7 +847,7 @@ class SharedDietPanel extends HTMLElement {
   // Moving a line: its chosen alternative (keyed by line index) moves with it.
   _swapLineChoices(mid, oi, a, b) {
     const c = this._draft.choices;
-    for (const ch of [c.defaults[mid], ...Object.values(c.dates).map((day) => day[mid])]) {
+    for (const ch of [own(c.defaults, mid), ...Object.values(c.dates).map((day) => own(day, mid))]) {
       if (!ch || ch.option !== oi) continue;
       const x = ch.lines[a], y = ch.lines[b];
       delete ch.lines[a];
@@ -1092,8 +1094,8 @@ class SharedDietPanel extends HTMLElement {
 
   _choiceCard(s, m) {
     const mid = esc(m.id);
-    const ov = this._draft.choices.dates[s]?.[m.id];
-    const def = this._draft.choices.defaults[m.id] ?? zeroChoice();
+    const ov = own(own(this._draft.choices.dates, s), m.id);
+    const def = own(this._draft.choices.defaults, m.id) ?? zeroChoice();
     const dateBlock = ov
       ? `${this._choiceEditor(s, m, ov)}<button data-act="clrov" data-date="${esc(s)}" data-mid="${mid}">Usa predefinito</button>`
       : `<p class="muted">Usa il predefinito</p><button data-act="ov" data-date="${esc(s)}" data-mid="${mid}">Ritocca per questa data</button>`;

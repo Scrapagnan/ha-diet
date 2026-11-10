@@ -18,22 +18,15 @@ def expand_item(item: dict, profile: dict, recipes: dict, recipe_choice: dict | 
     rid = item["recipe"]
     recipe = recipes.get(rid)
     if recipe is None:
-        return {"recipe": rid, "food": "Ricetta mancante", "note": "", "ingredients": [], "missing": True, "choices": []}
+        return {"recipe": rid, "food": "Ricetta mancante", "note": "", "ingredients": [], "missing": True}
     overrides = profile.get("recipe_qty", {}).get(rid, {})
     chosen_ids = recipe_choice or {}
     ingredients = []
-    choices = []
     for ing in recipe["ingredients"]:
         alts = ing["alts"]
         alt = next((a for a in alts if a["id"] == chosen_ids.get(ing["id"])), alts[0])
         ingredients.append({"food": alt["food"], "qty": overrides.get(alt["id"], alt["qty"]), "unit": alt["unit"], "note": ""})
-        if len(alts) >= 2:
-            choices.append({
-                "ingredient_id": ing["id"],
-                "alts": [{"id": a["id"], "food": a["food"], "qty": overrides.get(a["id"], a["qty"]), "unit": a["unit"]} for a in alts],
-                "chosen": alt["id"],
-            })
-    return {"recipe": rid, "food": recipe["name"], "note": recipe["note"], "ingredients": ingredients, "missing": False, "choices": choices}
+    return {"recipe": rid, "food": recipe["name"], "note": recipe["note"], "ingredients": ingredients, "missing": False}
 
 
 def effective_day(profile: dict, day: date) -> list[dict]:

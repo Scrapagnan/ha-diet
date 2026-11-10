@@ -15,6 +15,13 @@ from .model import fold_name
 
 _LOGGER = logging.getLogger(__name__)
 
+# Each profile adds two sensors that re-resolve its meals every minute.
+MAX_PROFILES = 30
+
+
+class LimitError(Exception):
+    """Too many profiles."""
+
 
 class ConflictError(Exception):
     """Profile or recipe was saved since it was read."""
@@ -65,6 +72,7 @@ class DietStore:
         self._profiles: dict[str, dict] = {}
         self._recipes: dict[str, dict] = {}
         self._listeners: list[Callable[[], None]] = []
+        self._snapshot: dict | None = None
 
     async def async_load(self) -> None:
         data = await self._store.async_load() or {}
@@ -86,7 +94,19 @@ class DietStore:
     def recipes(self) -> dict[str, dict]:
         return copy.deepcopy(self._recipes)
 
+    def snapshot(self) -> dict:
+        """One copy of all data per commit, shared by every reader. Read-only: never mutate it."""
+        if self._snapshot is None:
+            self._snapshot = {"profiles": copy.deepcopy(self._profiles), "recipes": copy.deepcopy(self._recipes)}
+        return self._snapshot
+
+    def profile(self, profile_id: str) -> dict | None:
+        profile = self._profiles.get(profile_id)
+        return copy.deepcopy(profile) if profile is not None else None
+
     async def async_create_profile(self, name: str) -> dict:
+        if len(self._profiles) >= MAX_PROFILES:
+            raise LimitError(MAX_PROFILES)
         profile = _new_profile(name)
         self._profiles[profile["id"]] = profile
         await self._async_commit()
@@ -96,17 +116,18 @@ class DietStore:
         current = self._profiles.get(profile["id"])
         if current is None:
             raise KeyError(profile["id"])
+        if profile["rev"] != current["rev"]:
+            raise ConflictError(profile["id"])
         saved = copy.deepcopy(profile)
         for alt in _alts(saved):
             if "recipe" in alt and alt["recipe"] not in self._recipes:
                 raise UnknownRecipeError(alt["recipe"])
-        saved["recipe_qty"] = {
-            rid: {aid: qty for aid, qty in overrides.items() if aid in self._alt_ids(rid)}
-            for rid, overrides in saved.get("recipe_qty", {}).items()
-            if rid in self._recipes
-        }
-        if profile["rev"] != current["rev"]:
-            raise ConflictError(profile["id"])
+        recipe_qty = {}
+        for rid, overrides in saved.get("recipe_qty", {}).items():
+            if rid in self._recipes:
+                valid = self._alt_ids(rid)
+                recipe_qty[rid] = {aid: qty for aid, qty in overrides.items() if aid in valid}
+        saved["recipe_qty"] = recipe_qty
         saved["rev"] += 1
         self._profiles[saved["id"]] = saved
         await self._async_commit()
@@ -167,9 +188,8 @@ class DietStore:
         return {a["id"] for i in self._recipes[recipe_id]["ingredients"] for a in i["alts"]}
 
     async def _async_commit(self) -> None:
-        await self._store.async_save(
-            {"profiles": copy.deepcopy(self._profiles), "recipes": copy.deepcopy(self._recipes)}
-        )
+        self._snapshot = None
+        await self._store.async_save(self.snapshot())
         for cb in list(self._listeners):
             try:
                 cb()

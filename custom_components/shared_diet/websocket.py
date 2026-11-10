@@ -11,13 +11,22 @@ import voluptuous as vol
 
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import Unauthorized
 from homeassistant.helpers import config_validation as cv
 
 from .const import DOMAIN
 from .model import fold_name, shopping_items
-from .store import ConflictError, DietStore, DuplicateNameError, InUseError, UnknownRecipeError
+from .store import ConflictError, DietStore, DuplicateNameError, InUseError, LimitError, UnknownRecipeError
 
 MAX_SPAN_DAYS = 62
+# Cardinality caps: resolving a meal costs lines x recipe ingredients, so every list needs a bound.
+MAX_ALTS = 10  # per ingredient and per line
+MAX_INGREDIENTS = 40  # per recipe
+MAX_LINES = 30  # per option
+MAX_OPTIONS = 10  # per meal
+MAX_MEALS = 12  # per day
+MAX_DATES = 400  # exception dates and per-date choices
+MAX_KEYS = 200  # other id-keyed maps (choice defaults, recipe overrides)
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}", re.ASCII)
 
 
@@ -82,6 +91,10 @@ def _nonnull_qty(value: Any) -> float:
 NON_EMPTY = vol.All(str, vol.Length(min=1))
 
 
+def _capped(validator, maximum: int):
+    return vol.All(validator, vol.Length(max=maximum))
+
+
 def _recipe_name(value: Any) -> str:
     if not isinstance(value, str) or not fold_name(value):
         raise vol.Invalid("expected a non-blank name")
@@ -92,6 +105,8 @@ RECIPE_NAME = vol.All(str, _recipe_name)
 TIME = _pattern(r"([01]\d|2[0-3]):[0-5]\d")
 PERSON = vol.Any(None, _pattern(r"person\.[a-z0-9_]+"))
 NOTIFY = vol.Any(None, _pattern(r"notify\.[a-z0-9_]+"))
+# The panel keys plain JS objects by meal id: a leading "_" would allow "__proto__".
+MEAL_ID = _pattern(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 
 ITEM = {
     vol.Required("food"): NON_EMPTY,
@@ -108,30 +123,32 @@ ALT = {
 }
 INGREDIENT = {
     vol.Required("id"): NON_EMPTY,
-    vol.Required("alts"): vol.All([ALT], vol.Length(min=1)),
+    vol.Required("alts"): vol.All([ALT], vol.Length(min=1, max=MAX_ALTS)),
 }
 RECIPE_SCHEMA = vol.Schema(
     {
         vol.Required("id"): NON_EMPTY,
         vol.Required("name"): RECIPE_NAME,
         vol.Required("note"): str,
-        vol.Required("ingredients"): vol.All([INGREDIENT], _unique_ids),
+        vol.Required("ingredients"): vol.All([INGREDIENT], vol.Length(max=MAX_INGREDIENTS), _unique_ids),
         vol.Required("rev"): _int(1),
     },
     extra=vol.PREVENT_EXTRA,
 )
-LINE = {vol.Required("alts"): vol.All([ITEM_OR_RECIPE], vol.Length(min=1))}
+LINE = {vol.Required("alts"): vol.All([ITEM_OR_RECIPE], vol.Length(min=1, max=MAX_ALTS))}
 MEAL = {
-    vol.Required("id"): NON_EMPTY,
+    vol.Required("id"): MEAL_ID,
     vol.Required("name"): NON_EMPTY,
     vol.Required("time"): vol.Any(None, TIME),
-    vol.Required("options"): vol.All([[LINE]], vol.Length(min=1)),
+    vol.Required("options"): vol.All([_capped([LINE], MAX_LINES)], vol.Length(min=1, max=MAX_OPTIONS)),
 }
+DAY = _capped([MEAL], MAX_MEALS)
 CHOICE = {
     vol.Required("option"): _int(0),
-    vol.Required("lines"): {_pattern(r"\d+"): _int(0)},
-    vol.Optional("recipes"): {NON_EMPTY: {NON_EMPTY: NON_EMPTY}},
+    vol.Required("lines"): _capped({_pattern(r"\d+"): _int(0)}, MAX_LINES),
+    vol.Optional("recipes"): _capped({NON_EMPTY: _capped({NON_EMPTY: NON_EMPTY}, MAX_INGREDIENTS)}, MAX_KEYS),
 }
+CHOICES_BY_MEAL = _capped({NON_EMPTY: CHOICE}, MAX_KEYS)
 PROFILE_SCHEMA = vol.Schema(
     {
         vol.Required("id"): NON_EMPTY,
@@ -142,15 +159,15 @@ PROFILE_SCHEMA = vol.Schema(
             vol.Required("minutes"): _int(0, 240),
             vol.Required("notify"): NOTIFY,
         },
-        vol.Required("week"): {vol.Required(str(d)): [MEAL] for d in range(7)},
-        vol.Required("exceptions"): {_iso_date: [MEAL]},
+        vol.Required("week"): {vol.Required(str(d)): DAY for d in range(7)},
+        vol.Required("exceptions"): _capped({_iso_date: DAY}, MAX_DATES),
         vol.Required("choices"): {
-            vol.Required("defaults"): {NON_EMPTY: CHOICE},
-            vol.Required("dates"): {_iso_date: {NON_EMPTY: CHOICE}},
+            vol.Required("defaults"): CHOICES_BY_MEAL,
+            vol.Required("dates"): _capped({_iso_date: CHOICES_BY_MEAL}, MAX_DATES),
         },
-        vol.Optional("recipe_qty", default=dict): {
-            NON_EMPTY: {NON_EMPTY: _nonnull_qty}
-        },
+        vol.Optional("recipe_qty", default=dict): _capped(
+            {NON_EMPTY: _capped({NON_EMPTY: _nonnull_qty}, MAX_INGREDIENTS * MAX_ALTS)}, MAX_KEYS
+        ),
         vol.Required("rev"): _int(1),
     },
     extra=vol.PREVENT_EXTRA,
@@ -170,14 +187,18 @@ async def ws_subscribe(hass: HomeAssistant, connection: websocket_api.ActiveConn
     store = _store(hass, connection, msg)
     if store is None:
         return
+    # Each subscription is pushed the whole store on every commit: one per connection is all the panel needs.
+    if any(getattr(unsub, "shared_diet", False) for unsub in connection.subscriptions.values()):
+        connection.send_error(msg["id"], "already_subscribed", "Già sottoscritto")
+        return
 
     @callback
     def push() -> None:
-        connection.send_message(
-            websocket_api.event_message(msg["id"], {"profiles": store.profiles, "recipes": store.recipes})
-        )
+        connection.send_message(websocket_api.event_message(msg["id"], store.snapshot()))
 
-    connection.subscriptions[msg["id"]] = store.async_add_listener(push)
+    unsub = store.async_add_listener(push)
+    unsub.shared_diet = True
+    connection.subscriptions[msg["id"]] = unsub
     connection.send_result(msg["id"])
     push()
 
@@ -190,7 +211,11 @@ async def ws_create_profile(hass: HomeAssistant, connection: websocket_api.Activ
     store = _store(hass, connection, msg)
     if store is None:
         return
-    profile = await store.async_create_profile(msg["name"])
+    try:
+        profile = await store.async_create_profile(msg["name"])
+    except LimitError as err:
+        connection.send_error(msg["id"], "limit", f"Massimo {err.args[0]} profili")
+        return
     connection.send_result(msg["id"], {"profile": profile})
 
 
@@ -305,7 +330,8 @@ async def ws_shopping(hass: HomeAssistant, connection: websocket_api.ActiveConne
         connection.send_error(msg["id"], "invalid_format", "Intervallo non valido")
         return
 
-    profiles = store.profiles
+    data = store.snapshot()
+    profiles = data["profiles"]
     if msg["profile_ids"] is None:
         selected = list(profiles.values())
     else:
@@ -314,14 +340,20 @@ async def ws_shopping(hass: HomeAssistant, connection: websocket_api.ActiveConne
             return
         selected = [profiles[pid] for pid in dict.fromkeys(msg["profile_ids"])]
 
-    items = shopping_items(selected, start, end, store.recipes)
-    for text in items:
-        await hass.services.async_call(
-            "todo",
-            "add_item",
-            {"entity_id": msg["todo_entity_id"], "item": text},
-            blocking=True,
-        )
+    items = shopping_items(selected, start, end, data["recipes"])
+    try:
+        for text in items:
+            # The caller's context makes HA enforce their own permission on the todo entity.
+            await hass.services.async_call(
+                "todo",
+                "add_item",
+                {"entity_id": msg["todo_entity_id"], "item": text},
+                blocking=True,
+                context=connection.context(msg),
+            )
+    except Unauthorized:
+        connection.send_error(msg["id"], "unauthorized", "Non hai i permessi su questa lista")
+        return
     connection.send_result(msg["id"], {"items": items})
 
 

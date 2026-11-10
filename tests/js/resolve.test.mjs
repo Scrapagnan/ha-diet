@@ -463,4 +463,28 @@ const RECIPES = {
   assert.deepEqual(week[0][0].options[0].map((l) => l.alts[0].food), ["Pane", "Latte"]);
 }
 
+
+// A meal id that names an Object.prototype member (stored by another user via raw WS) must resolve like any other id:
+// no inherited choice, no crash of the read views, and choice edits land on an own property.
+{
+  const today = new Date(); const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  const week = {};
+  for (let d = 0; d < 7; d++) week[d] = ["constructor", "toString", "valueOf"].map((id) => ({ id, name: id, time: "12:00",
+    options: [[{ alts: [{ food: "Pasta", qty: 80, unit: "g", note: "" }, { food: "Riso", qty: 70, unit: "g", note: "" }] }]] }));
+  const profile = { id: "p1", name: "Luca", person: null, reminder: { enabled: false, minutes: 15, notify: null },
+    week, exceptions: {}, choices: { defaults: {}, dates: {} }, rev: 1, recipe_qty: {} };
+  const p = new SharedDietPanel();
+  p._recipes = {};
+  p._profiles = { p1: profile };
+  p._profileId = "p1";
+  p._draft = plain(profile);
+  for (const view of ["today", "dates", "choices"]) {
+    p._view = view;
+    p._range = { from: iso, to: iso };
+    assert.match(p._body(), /Pasta/, view);
+  }
+  p._choiceSlot("", "constructor", true).option = 0;
+  assert.ok(Object.hasOwn(p._draft.choices.defaults, "constructor"));
+  assert.equal(typeof ({}).constructor, "function");
+}
 console.log("resolve.test.mjs: all assertions passed");
