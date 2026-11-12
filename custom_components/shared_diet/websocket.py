@@ -27,6 +27,7 @@ MAX_OPTIONS = 10  # per meal
 MAX_MEALS = 12  # per day
 MAX_DATES = 400  # exception dates and per-date choices
 MAX_KEYS = 200  # other id-keyed maps (choice defaults, recipe overrides)
+MAX_EXCLUDE = 1000  # shopping rows left out of the todo list
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}", re.ASCII)
 
 
@@ -140,6 +141,7 @@ MEAL = {
     vol.Required("id"): MEAL_ID,
     vol.Required("name"): NON_EMPTY,
     vol.Required("time"): vol.Any(None, TIME),
+    vol.Optional("remind"): bool,  # False: no reminder for this meal; absent means on
     vol.Required("options"): vol.All([_capped([LINE], MAX_LINES)], vol.Length(min=1, max=MAX_OPTIONS)),
 }
 DAY = _capped([MEAL], MAX_MEALS)
@@ -317,7 +319,9 @@ async def ws_delete_recipe(hass: HomeAssistant, connection: websocket_api.Active
         vol.Required("start"): cv.date,
         vol.Required("end"): cv.date,
         vol.Required("profile_ids"): vol.Any(None, [str]),
-        vol.Required("todo_entity_id"): _pattern(r"todo\.[a-z0-9_]+"),
+        # Without a todo entity nothing is added: the call only previews the items.
+        vol.Optional("todo_entity_id"): _pattern(r"todo\.[a-z0-9_]+"),
+        vol.Optional("exclude", default=[]): _capped([str], MAX_EXCLUDE),
     }
 )
 @websocket_api.async_response
@@ -341,6 +345,11 @@ async def ws_shopping(hass: HomeAssistant, connection: websocket_api.ActiveConne
         selected = [profiles[pid] for pid in dict.fromkeys(msg["profile_ids"])]
 
     items = shopping_items(selected, start, end, data["recipes"])
+    if "todo_entity_id" not in msg:
+        connection.send_result(msg["id"], {"items": items})
+        return
+    excluded = set(msg["exclude"])
+    items = [text for text in items if text not in excluded]
     try:
         for text in items:
             # The caller's context makes HA enforce their own permission on the todo entity.

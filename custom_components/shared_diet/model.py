@@ -120,7 +120,7 @@ def shopping_items(profiles: list[dict], start: date, end: date, recipes: dict |
                             totals[key] = (name, qty + item["qty"])
         day += timedelta(days=1)
     numeric_foods = {norm for norm, _ in totals}
-    rows = [(norm, unit, f"{name} — {qty:g} {unit}") for (norm, unit), (name, qty) in totals.items()]
+    rows = [(norm, unit, f"{name} - {qty:g} {unit}") for (norm, unit), (name, qty) in totals.items()]
     rows += [
         (norm, "", f"{name} ({note})" if note else name)
         for norm, (name, note) in untimed.items()

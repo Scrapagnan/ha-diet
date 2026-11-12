@@ -1,4 +1,4 @@
-# HA Shared Diet — Design
+# HA Shared Diet - Design
 
 Data: 2026-11-09
 
@@ -56,7 +56,7 @@ Gestire in Home Assistant le diete (compilate a mano, tipicamente da un nutrizio
 ### Riga alimento
 - Nome alimento, quantità **numerica opzionale**, unità (es. g, ml, pz, cucchiaio), **nota opzionale** (es. "q.b.", "a piacere").
 - Righe senza quantità numerica vanno in spesa senza totale (una sola riga per alimento).
-- L'editor suggerisce nomi alimento già usati (autocompletamento) per mantenerli coerenti — necessario per sommare correttamente nella spesa. **[scelta del builder]**
+- L'editor suggerisce nomi alimento già usati (autocompletamento) per mantenerli coerenti - necessario per sommare correttamente nella spesa. **[scelta del builder]**
 
 ### Eccezioni per data
 - Per una data specifica e un profilo si può sovrascrivere il giorno (aggiungere/togliere/modificare pasti) senza toccare lo schema settimanale.
@@ -85,7 +85,7 @@ Gestire in Home Assistant le diete (compilate a mano, tipicamente da un nutrizio
 - Input: intervallo di date + profili inclusi (default tutti). **[scelta del builder: selezione profili]**
 - Per ogni data usa il giorno effettivo (eccezioni incluse) e le alternative scelte (ritocco per data > default schema > prima opzione).
 - Somma gli alimenti con stesso nome (normalizzato: maiuscole/spazi) e stessa unità; unità diverse restano righe separate.
-- Output: aggiunta degli elementi a una lista To-do di HA scelta dall'utente (es. `todo.shopping_list`), formato tipo "Pasta integrale — 560 g".
+- Output: aggiunta degli elementi a una lista To-do di HA scelta dall'utente (es. `todo.shopping_list`), formato tipo "Pasta integrale - 560 g".
 
 ### Sensori
 - Per profilo: "pasto attuale" e "prossimo pasto", con attributi contenenti il dettaglio (alimenti, opzione scelta, orario).

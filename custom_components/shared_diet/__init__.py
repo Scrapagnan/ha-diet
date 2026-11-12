@@ -53,7 +53,7 @@ async def _send_reminders(hass: HomeAssistant, store: DietStore) -> None:
             hhmm = target.strftime("%H:%M")
             service = reminder["notify"].removeprefix("notify.")
             for meal in effective_day(profile, target.date()):
-                if meal["time"] != hhmm:
+                if meal["time"] != hhmm or meal.get("remind") is False:
                     continue
                 resolved = resolve_meal(meal, choice_for(profile, target.date(), meal["id"]), profile, recipes)
                 sends.append(

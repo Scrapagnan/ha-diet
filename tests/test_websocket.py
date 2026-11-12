@@ -38,7 +38,7 @@ def full_profile(base):
             [{"alts": [item("Insalata", 200.0)]}],
         ],
     )
-    snack = meal("snack", None, [[{"alts": [item("Frutta", 1.0, "pz")]}]])
+    snack = {**meal("snack", None, [[{"alts": [item("Frutta", 1.0, "pz")]}]]), "remind": False}
     return {
         **base,
         "person": "person.luca",
@@ -181,9 +181,25 @@ async def test_shopping_adds_to_todo(hass, client):
         profile_ids=None,
         todo_entity_id="todo.spesa",
     )
-    assert resp["result"]["items"] == ["Pasta — 80 g"]
+    assert resp["result"]["items"] == ["Pasta - 80 g"]
     assert len(calls) == 1
-    assert calls[0].data == {"entity_id": "todo.spesa", "item": "Pasta — 80 g"}
+    assert calls[0].data == {"entity_id": "todo.spesa", "item": "Pasta - 80 g"}
+
+
+async def test_shopping_preview_and_exclude(hass, client):
+    calls = async_mock_service(hass, "todo", "add_item")
+    profile = (await call(client, "create_profile", name="Luca"))["result"]["profile"]
+    profile["week"]["0"] = [meal("pasta", "12:00", [[{"alts": [item("Pasta", 80.0)]}, {"alts": [item("Olio", 10.0, "ml")]}]])]
+    assert (await call(client, "save_profile", profile=profile))["success"]
+    base = {"start": MONDAY.isoformat(), "end": MONDAY.isoformat(), "profile_ids": None}
+
+    resp = await call(client, "shopping", **base)  # no todo entity: preview only
+    assert resp["result"]["items"] == ["Olio - 10 ml", "Pasta - 80 g"]
+    assert calls == []
+
+    resp = await call(client, "shopping", **base, todo_entity_id="todo.spesa", exclude=["Olio - 10 ml"])
+    assert resp["result"]["items"] == ["Pasta - 80 g"]
+    assert [c.data["item"] for c in calls] == ["Pasta - 80 g"]
 
 
 async def test_shopping_bad_range_rejected(client):

@@ -18,7 +18,7 @@
 - Pannello visibile a tutti gli utenti (`require_admin=False`); comandi websocket senza `@require_admin`.
 - UI in italiano.
 - Nessuno storico modifiche.
-- Formato riga spesa con totale: `"<Nome> — <qty> <unit>"` (em dash, es. `"Pasta integrale — 560 g"`); qty senza `.0` finale.
+- Formato riga spesa con totale: `"<Nome> - <qty> <unit>"` (em dash, es. `"Pasta integrale - 560 g"`); qty senza `.0` finale.
 - Priorità scelta alternative: ritocco per data > default per pasto dello schema > prima opzione (indice 0). Indice non più valido → 0.
 - Giorno effettivo: eccezione per data se esiste, altrimenti giorno dello schema (`weekday()`: 0=lunedì).
 - Pasti senza orario: mai "attuale/prossimo", mai promemoria.
@@ -102,10 +102,10 @@ Run: `pytest tests/test_config_flow.py -v` → FAIL (modulo mancante).
 
 **Interfaces:**
 - Produces:
-  - `effective_day(profile: dict, day: date) -> list[dict]` — lista Meal.
-  - `choice_for(profile: dict, day: date, meal_id: str) -> dict` — Choice con priorità data > default > `{"option": 0, "lines": {}}`.
+  - `effective_day(profile: dict, day: date) -> list[dict]` - lista Meal.
+  - `choice_for(profile: dict, day: date, meal_id: str) -> dict` - Choice con priorità data > default > `{"option": 0, "lines": {}}`.
   - `resolve_meal(meal: dict, choice: dict) -> dict` → `{"id", "name", "time", "option": int, "items": [Item], "all_options": meal["options"]}`; indici fuori range → 0.
-  - `current_and_next(profile: dict, now: datetime) -> tuple[dict | None, dict | None]` — pasti risolti; il "prossimo" può essere il primo con orario di domani.
+  - `current_and_next(profile: dict, now: datetime) -> tuple[dict | None, dict | None]` - pasti risolti; il "prossimo" può essere il primo con orario di domani.
 
 - [ ] **Step 1: Test fallisce**
 
@@ -165,32 +165,32 @@ Run: `pytest tests/test_model_day.py -v` → FAIL.
 
 **Interfaces:**
 - Consumes: `effective_day`, `choice_for`, `resolve_meal` (Task 2).
-- Produces: `shopping_items(profiles: list[dict], start: date, end: date) -> list[str]` — estremi inclusi, ordinate alfabeticamente per nome normalizzato.
+- Produces: `shopping_items(profiles: list[dict], start: date, end: date) -> list[str]` - estremi inclusi, ordinate alfabeticamente per nome normalizzato.
 
 - [ ] **Step 1: Test fallisce**
 
 ```python
 def test_sums_same_food_normalized_across_profiles_and_days():
     # Luca: Pasta integrale 80 g lun+mar; Anna: " pasta integrale " 100 g lun
-    assert "Pasta integrale — 260 g" in shopping_items([luca, anna], MON, MON + timedelta(1))
+    assert "Pasta integrale - 260 g" in shopping_items([luca, anna], MON, MON + timedelta(1))
 
 def test_different_units_stay_separate():
-    assert set(shopping_items([p_latte_ml_and_pz], MON, MON)) >= {"Latte — 200 ml", "Latte — 1 pz"}
+    assert set(shopping_items([p_latte_ml_and_pz], MON, MON)) >= {"Latte - 200 ml", "Latte - 1 pz"}
 
 def test_no_qty_listed_once_without_total():
     # due righe "Sale" qty None note "q.b."
     assert shopping_items([p_sale_twice], MON, MON).count("Sale (q.b.)") == 1
 
 def test_no_qty_dropped_when_same_food_has_numeric_qty():
-    assert shopping_items([p_olio_qb_and_10ml], MON, MON) == ["Olio — 10 ml"]
+    assert shopping_items([p_olio_qb_and_10ml], MON, MON) == ["Olio - 10 ml"]
 
 def test_uses_chosen_alternative_and_exception():
     # scelta default "Riso" su lunedì, eccezione martedì con Pizza
     items = shopping_items([p_with_choice_and_exception], MON, MON + timedelta(1))
-    assert "Riso — 80 g" in items and "Pizza — 1 pz" in items and not any(i.startswith("Pasta") for i in items)
+    assert "Riso - 80 g" in items and "Pizza - 1 pz" in items and not any(i.startswith("Pasta") for i in items)
 
 def test_decimal_qty_formatting():
-    assert "Olio — 7.5 ml" in shopping_items([p_olio_2_5_x3], MON, MON)
+    assert "Olio - 7.5 ml" in shopping_items([p_olio_2_5_x3], MON, MON)
 ```
 
 Run: `pytest tests/test_model_shopping.py -v` → FAIL.
@@ -285,8 +285,8 @@ async def test_subscribe_pushes_on_change(hass, hass_ws_client):
 async def test_shopping_adds_to_todo(hass, hass_ws_client):
     calls = async_mock_service(hass, "todo", "add_item")
     # profilo con Pasta 80 g lun, intervallo lun-lun
-    assert resp["result"]["items"] == ["Pasta — 80 g"]
-    assert calls[0].data == {"entity_id": "todo.spesa", "item": "Pasta — 80 g"}
+    assert resp["result"]["items"] == ["Pasta - 80 g"]
+    assert calls[0].data == {"entity_id": "todo.spesa", "item": "Pasta - 80 g"}
 
 async def test_shopping_bad_range_rejected(hass, hass_ws_client):
     # end < start, poi range di 63 giorni

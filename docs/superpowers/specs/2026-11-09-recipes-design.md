@@ -1,4 +1,4 @@
-# Ricette — Design
+# Ricette - Design
 
 Data: 2026-11-09 · Estende: `docs/superpowers/specs/2026-11-09-ha-shared-diet-design.md` (integrazione `shared_diet`, branch `feat/shared-diet`, versione attuale 0.1.6).
 

@@ -1,4 +1,4 @@
-# Alternative negli ingredienti delle ricette — Implementation Plan
+# Alternative negli ingredienti delle ricette - Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -36,14 +36,14 @@
 
 **Files:** Modify `custom_components/shared_diet/model.py`; Test `tests/test_model_recipes.py` (aggiorna fixture al nuovo formato + nuovi casi).
 
-**Interfaces — Produces:**
-- `expand_item(item, profile, recipes, recipe_choice: dict | None = None) -> dict` — `recipe_choice` = `{ingredient_id: alt_id}`; per ogni ingrediente l'alternativa effettiva diventa la voce in `ingredients` (`{"food","qty","unit","note": ""}`); il risultato aggiunge `"choices": [{"ingredient_id", "alts": [{"id","food","qty","unit"}], "chosen": alt_id}]` per i soli ingredienti con più alternative (serve al pannello/"Vedi alternative"; grammature effettive della persona).
+**Interfaces - Produces:**
+- `expand_item(item, profile, recipes, recipe_choice: dict | None = None) -> dict` - `recipe_choice` = `{ingredient_id: alt_id}`; per ogni ingrediente l'alternativa effettiva diventa la voce in `ingredients` (`{"food","qty","unit","note": ""}`); il risultato aggiunge `"choices": [{"ingredient_id", "alts": [{"id","food","qty","unit"}], "chosen": alt_id}]` per i soli ingredienti con più alternative (serve al pannello/"Vedi alternative"; grammature effettive della persona).
 - `resolve_meal(meal, choice, profile=None, recipes=None)` passa `choice.get("recipes", {}).get(rid, {})` a `expand_item`.
 - `shopping_items`, `current_and_next`, `format_item`: firme invariate; usano l'alternativa effettiva.
 
 - [ ] **Step 1: test che falliscono** (RECIPES con Farina [60 g] e Latte [Latte 100 ml | Soia 120 ml], id alternative `a1`, `a2`, `a3`):
   - nessuna scelta → `"Pancake: Farina 60 g, Latte 100 ml"`;
-  - Choice `recipes {r1: {i2: "a3"}}` → `"Pancake: Farina 60 g, Soia 120 ml"` e spesa con `"Soia — 120 ml"` senza Latte;
+  - Choice `recipes {r1: {i2: "a3"}}` → `"Pancake: Farina 60 g, Soia 120 ml"` e spesa con `"Soia - 120 ml"` senza Latte;
   - override `recipe_qty {r1: {a3: 90}}` + scelta Soia → `Soia 90 ml`; override su `a2` non influenza Soia;
   - `alt_id` inesistente → prima alternativa;
   - stessa ricetta in due pasti con Choice diverse → spesa somma Latte e Soia;
@@ -55,7 +55,7 @@
 
 **Files:** Modify `store.py`, `websocket.py`; Test `tests/test_store_recipes.py`, `tests/test_websocket_recipes.py`, `tests/test_sensor.py` (aggiorna fixture al nuovo formato + nuovi casi).
 
-**Interfaces — Consumes:** Task 1. **Produces:**
+**Interfaces - Consumes:** Task 1. **Produces:**
 - Store: migrazione ingredienti al caricamento (vedi Global Constraints); `async_save_profile` pota `recipe_qty` per **alt id** (ricette/alternative inesistenti); `async_create_recipe` invariata.
 - Websocket: `INGREDIENT = {id, alts: [ {id, food, qty, unit} ] (≥1)}`, id alternative unici nella ricetta (e id ingredienti unici); `CHOICE` accetta `vol.Optional("recipes")`: `{NON_EMPTY: {NON_EMPTY: NON_EMPTY}}`.
 - Sensori/promemoria: nessuna modifica di codice attesa (passano già la Choice); aggiungi un test che la scelta Soia compare nel sensore.
@@ -63,11 +63,11 @@
 - [ ] **Step 1: test che falliscono:** storage 0.2.0 (ingredienti piatti + `recipe_qty[r1][<ingredient id>]`) si carica in nuovo formato e la grammatura personalizzata resta; potatura per alt id; schema rifiuta ingrediente con `food` al primo livello, `alts: []`, alt id duplicati tra ingredienti, `recipes` con valori vuoti; accetta Choice con `recipes`; sensore con scelta Soia.
 - [ ] **Step 2:** implementa. **Step 3:** suite → PASS. Commit `feat: ingredient alternatives in store and api`.
 
-### Task 3: Pannello — logica, Ricette, riga-ricetta
+### Task 3: Pannello - logica, Ricette, riga-ricetta
 
 **Files:** Modify `custom_components/shared_diet/frontend/shared-diet-panel.js`; Test `tests/js/resolve.test.mjs`.
 
-**Interfaces — Consumes:** Task 1–2 (forma dati). **Produces:** `expandItem(item, profile, recipes, recipeChoice)` allineato a `expand_item` (incluso `choices`); `resolveMeal` passa `choice.recipes?.[rid]`; `cleanRecipe` per il nuovo formato; `setRecipeQty` invariata ma con chiave alt id.
+**Interfaces - Consumes:** Task 1–2 (forma dati). **Produces:** `expandItem(item, profile, recipes, recipeChoice)` allineato a `expand_item` (incluso `choices`); `resolveMeal` passa `choice.recipes?.[rid]`; `cleanRecipe` per il nuovo formato; `setRecipeQty` invariata ma con chiave alt id.
 
 - [ ] **Step 1: test node che falliscono:** stessi casi testuali di Task 1 per `expandItem`/`fmtItem`; `cleanRecipe` con alternative (rimuove alternative con alimento vuoto, rimuove ingredienti senza alternative, mantiene gli id).
 - [ ] **Step 2:** implementa:
@@ -76,11 +76,11 @@
   - Oggi / "Vedi alternative": la ricetta mostra l'alternativa scelta; con "Vedi alternative" le altre alternative degli ingredienti in grigio.
 - [ ] **Step 3:** test JS + suite Python → PASS. Commit `feat(panel): ingredient alternatives in recipes tab and meals`.
 
-### Task 4: Pannello — scheda Scelte, versione, README
+### Task 4: Pannello - scheda Scelte, versione, README
 
 **Files:** Modify `custom_components/shared_diet/frontend/shared-diet-panel.js`, `const.py`, `manifest.json`, `README.md`.
 
-**Interfaces — Consumes:** Task 3.
+**Interfaces - Consumes:** Task 3.
 
 - [ ] **Step 1:** Scelte: nel blocco di ogni pasto, dopo le tendine delle righe, per ogni ricetta nel percorso scelto (opzione scelta + alternativa scelta di ogni riga) e ogni suo ingrediente con ≥2 alternative, una tendina `"<Ricetta> · Ingrediente N"` (valori = alt id, etichette = alimento + grammatura effettiva della persona) sia per "Predefinito" sia per "Questa data" (con ritocco). Scrive `choice.recipes[rid][iid] = altId`. Cambiare l'alternativa di una riga ridisegna la vista.
 - [ ] **Step 2:** versione `0.3.0`; README: alternative negli ingredienti (scheda Ricette, scelta in Scelte, grammature per alternativa).

@@ -84,6 +84,17 @@ async def test_reminder_sent_minutes_before(hass, freezer):
     assert calls[0].data["message"] == "Pasta integrale 80 g, Olio (q.b.)"
 
 
+async def test_reminder_skipped_for_meal_with_remind_off(hass, freezer):
+    calls = async_mock_service(hass, "notify", "mobile_app_x")
+    freezer.move_to(at(10, 0))
+    store = await _setup_entry(hass)
+    await _add_profile(hass, store, "Luca", [COLAZIONE, {**PRANZO, "remind": False}], "notify.mobile_app_x")
+    freezer.move_to(at(12, 45))
+    async_fire_time_changed(hass, at(12, 45))
+    await hass.async_block_till_done()
+    assert calls == []
+
+
 async def test_missing_notify_service_does_not_break(hass, freezer, caplog):
     freezer.move_to(at(10, 0))
     await _setup_luca(hass, notify="notify.non_esiste")

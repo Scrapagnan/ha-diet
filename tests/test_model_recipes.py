@@ -94,15 +94,15 @@ def test_shopping_expands_recipe_and_sums_with_plain_food():
     # lunedi: riga 1 = Pancake (override Farina 40), riga 2 = Farina 20 g semplice
     p = profile(mon=[lunch({"recipe": "r1"}, item("Farina", 20.0))], recipe_qty={"r1": {"a1": 40.0}})
     items = shopping_items([p], MON, MON, RECIPES)
-    assert "Farina — 60 g" in items
-    assert "Latte — 100 ml" in items
+    assert "Farina - 60 g" in items
+    assert "Latte - 100 ml" in items
     assert not any(s.startswith("Pancake") for s in items)
 
 
 def test_shopping_uses_chosen_alt_from_meal_choice():
     p = profile(mon=[recipe_meal("l")], choices={"l": {"option": 0, "lines": {}, "recipes": {"r1": {"i2": "a3"}}}})
     items = shopping_items([p], MON, MON, RECIPES)
-    assert "Soia — 120 ml" in items
+    assert "Soia - 120 ml" in items
     assert not any(s.startswith("Latte") for s in items)
 
 
@@ -110,8 +110,8 @@ def test_shopping_same_recipe_two_meals_different_choices_sums():
     p = profile(mon=[recipe_meal("a"), recipe_meal("b")],
                 choices={"b": {"option": 0, "lines": {}, "recipes": {"r1": {"i2": "a3"}}}})
     items = shopping_items([p], MON, MON, RECIPES)
-    assert "Latte — 100 ml" in items and "Soia — 120 ml" in items
-    assert "Farina — 120 g" in items
+    assert "Latte - 100 ml" in items and "Soia - 120 ml" in items
+    assert "Farina - 120 g" in items
 
 
 def test_resolve_meal_passes_recipe_choice():
@@ -125,7 +125,7 @@ def test_shopping_recipe_as_unchosen_alternative_is_ignored():
     p = profile(mon=[{"id": "l", "name": "l", "time": "13:00",
                       "options": [[{"alts": [item("Yogurt", 150.0), {"recipe": "r1"}]}]]}])
     items = shopping_items([p], MON, MON, RECIPES)
-    assert "Yogurt — 150 g" in items and not any(i.startswith("Farina") for i in items)
+    assert "Yogurt - 150 g" in items and not any(i.startswith("Farina") for i in items)
 
 
 def test_shopping_missing_recipe_skipped():

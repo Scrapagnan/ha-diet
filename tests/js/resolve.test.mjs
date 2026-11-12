@@ -10,6 +10,7 @@ const ctx = {
   HTMLElement: class { attachShadow() { this.shadowRoot = { addEventListener() {}, getElementById: () => null, querySelectorAll: () => [] }; } },
   customElements: { get: () => undefined, define() {} },
   crypto: globalThis.crypto, // uid() in the panel
+  CustomEvent: class { constructor(type, init) { this.type = type; Object.assign(this, init); } },
 };
 vm.createContext(ctx);
 const { expandItem, fmtItem, resolveMeal, cleanProfile, cleanRecipe, setRecipeQty, matchRecipes, cadenceRange, sumItems, SharedDietPanel } = vm.runInContext(
@@ -93,21 +94,17 @@ const RECIPES = {
   assert.deepEqual(r.items.map(fmtItem), ["Latte 200 ml"]);
 }
 
-// I1: a draft on a recipe deleted by another user is announced; our own delete (pushed before its reply) and a clean draft are not.
+// I1: a draft on a recipe deleted by another user is dropped and announced; our own delete (pushed before its reply) is not.
 {
   const p = new SharedDietPanel();
   const flashes = [];
   p._flash = (t) => flashes.push(t);
   p._recipes = {};
-  p._recipeId = "r1"; p._recipeDirty = true; p._recipeDraft = { id: "r1" };
+  p._rDrafts = { r1: { id: "r1", name: "Pancake" }, r2: { id: "r2", name: "Caffè" } };
+  p._deletingId = "r2";
   p._syncRecipe();
-  assert.deepEqual(flashes, ["Ricetta eliminata da un altro utente: modifiche scartate"]);
-  assert.equal(p._recipeId, null);
-  p._recipeId = "r2"; p._recipeDirty = true; p._deletingId = "r2";
-  p._syncRecipe();
-  p._recipeId = "r3"; p._recipeDirty = false;
-  p._syncRecipe();
-  assert.equal(flashes.length, 1);
+  assert.deepEqual(flashes, ["Ricetta «Pancake» eliminata da un altro utente: modifiche scartate"]);
+  assert.deepEqual(Object.keys(p._rDrafts), []);
 }
 
 // I2: an edit in one meal's grams field is copied into the same ingredient elsewhere, and only its reset button is toggled.
@@ -207,6 +204,7 @@ const RECIPES = {
   assert.doesNotMatch(editor, /undefined|NaN/);
   panelEl._foldToggled.clear();
   assert.match(panelEl._body(), /<p class="muted summary">Pancake \/ Latte<\/p>/);
+  assert.match(panelEl._body(), new RegExp(`<section class="card" data-act="fold" data-key="w${panelEl._wday}:m1">`)); // tap anywhere opens
 
   panelEl._view = "choices";
   const choices = panelEl._body();
@@ -287,13 +285,68 @@ const RECIPES = {
   ]);
 }
 {
+  // Ricette tab: "+ Aggiungi ricetta" on top, every recipe a folded card with an editable name and its foods; ▸ opens it.
+  const q = new SharedDietPanel();
+  q._profiles = {};
+  q._recipes = RECIPES;
+  q._view = "recipes";
+  let html0 = q._body();
+  const n = Object.keys(RECIPES).length;
+  assert.ok(html0.indexOf('data-act="rcreate"') < html0.indexOf('class="card"'));
+  assert.equal(html0.match(/aria-label="Espandi ricetta"/g).length, n);
+  assert.equal(html0.match(/<section class="card" data-act="fold" data-key="r:/g).length, n); // tap anywhere opens
+  assert.equal(html0.match(/data-ch="rfield" data-f="name"/g).length, n);
+  assert.match(html0, /<p class="muted summary">Latte \/ Soia · Caffè<\/p>/);
+  assert.doesNotMatch(html0, /data-ch="ring"/);
+  // Tap on the folded card opens it; a tap on its name field does not.
+  q._render = () => {};
+  const card = { dataset: { act: "fold", key: "r:r2" } };
+  q._onClick({ target: { closest: (sel) => (sel === "input, select, textarea" ? {} : card) } });
+  assert.ok(!q._foldToggled.has("r:r2"));
+  q._onClick({ target: { closest: (sel) => (sel === "input, select, textarea" ? null : card) } });
+  assert.ok(q._foldToggled.has("r:r2"));
+  html0 = q._body();
+  assert.equal(html0.match(/aria-label="Espandi ricetta"/g).length, n - 1);
+  assert.match(html0, /aria-label="Comprimi ricetta"/);
+  // Two recipes edited at once, one of them folded: a draft each; one page-level Salva saves both.
+  assert.match(html0, /<div class="savebar"><h2>Ricette<\/h2>\s*<button class="primary" id="rsave" data-act="rsave" hidden>/);
+  q.shadowRoot = { getElementById: () => null, querySelector: () => null };
+  q._onChange({ target: { value: "Frittelle", type: "text", dataset: { ch: "rfield", f: "name", rid: "r1" } } });
+  q._onChange({ target: { value: "Orzo", type: "text", dataset: { ch: "ring", rid: "r2", f: "food", i: "1", a: "0" } } });
+  assert.deepStrictEqual(plain(Object.keys(q._rDrafts)), ["r1", "r2"]);
+  assert.equal(RECIPES.r1.name, "Pancake");
+  html0 = q._body();
+  assert.match(html0, /id="rsave" data-act="rsave">Salva/);
+  assert.match(html0, /value="Frittelle"/);
+  assert.match(html0, /value="Orzo"/);
+  q.dispatchEvent = () => {};
+  const saved = [];
+  q._hass = { callWS: async (m) => { saved.push(m.recipe); return { recipe: { ...m.recipe, rev: m.recipe.rev + 1 } }; } };
+  await q._saveRecipes();
+  assert.deepStrictEqual(saved.map((r) => r.name), ["Frittelle", "Cappuccino"]);
+  assert.equal(saved[1].ingredients[1].alts[0].food, "Orzo");
+  assert.deepStrictEqual(plain(q._rDrafts), {});
+  assert.equal(q._recipes.r1.name, "Frittelle"); // shown before the push
+  q._recipes = RECIPES;
+  // Create: first free "Nuova ricetta" name, opened with its name focused.
+  q._recipes = { ...RECIPES, x: { id: "x", name: "nuova  RICETTA", note: "", ingredients: [], rev: 1 } };
+  q.dispatchEvent = () => {};
+  let sent;
+  q._hass = { callWS: async (m) => { sent = m; return { recipe: { id: "n", name: m.name, note: "", ingredients: [], rev: 1 } }; } };
+  await q._createRecipe();
+  assert.equal(sent.name, "Nuova ricetta 2");
+  assert.equal(q._recipes.n.name, "Nuova ricetta 2");
+  assert.ok(q._foldToggled.has("r:n"));
+  assert.equal(q._focus, '[data-ch="rfield"][data-f="name"][data-rid="n"]');
+  assert.match(q._body(), /value="Nuova ricetta 2" data-ch="rfield"/); // shown before the push arrives
+}
+{
   // Ricette tab: each ingredient lists its alternatives with "oppure" between them; "+ OPPURE" adds an alt and focuses it; × removes one.
   const p = new SharedDietPanel();
   p._render = () => {};
   p._profiles = {};
   p._recipes = RECIPES;
-  p._recipeId = "r2";
-  p._recipeDraft = plain(RECIPES.r2);
+  p._foldToggled.add("r:r2");
   p._view = "recipes";
   const html = p._body();
   assert.equal(html.match(/class="food"[^>]*data-i="\d" data-a="\d"/g).length, 3); // one food field per alternative
@@ -303,25 +356,25 @@ const RECIPES = {
   assert.doesNotMatch(html, /undefined|NaN/);
 
   p.shadowRoot = { getElementById: () => null, querySelector: () => null, addEventListener() {} };
-  p._onClick({ target: { closest: () => ({ dataset: { act: "raddalt", i: "1" } }) } });
-  const added = p._recipeDraft.ingredients[1].alts;
+  p._onClick({ target: { closest: () => ({ dataset: { act: "raddalt", rid: "r2", i: "1" } }) } });
+  const added = p._rDrafts.r2.ingredients[1].alts; // the first edit makes the draft
   assert.equal(added.length, 2);
   assert.equal(added[1].food, "");
   assert.equal(typeof added[1].id, "string");
   assert.notEqual(added[1].id, added[0].id);
-  assert.equal(p._focus, '[data-ch="ring"][data-f="food"][data-i="1"][data-a="1"]');
-  assert.equal(p._recipeDirty, true);
+  assert.equal(p._focus, '[data-ch="ring"][data-rid="r2"][data-f="food"][data-i="1"][data-a="1"]');
+  assert.equal(p._recipeDirty(), true);
 
-  p._onChange({ target: { value: "Zucchero", type: "text", dataset: { ch: "ring", f: "food", i: "1", a: "1" } } });
-  assert.equal(p._recipeDraft.ingredients[1].alts[1].food, "Zucchero");
-  assert.equal(p._recipeDraft.ingredients[1].alts[0].food, "Caffè");
+  p._onChange({ target: { value: "Zucchero", type: "text", dataset: { ch: "ring", rid: "r2", f: "food", i: "1", a: "1" } } });
+  assert.equal(p._rDrafts.r2.ingredients[1].alts[1].food, "Zucchero");
+  assert.equal(p._rDrafts.r2.ingredients[1].alts[0].food, "Caffè");
 
-  p._onClick({ target: { closest: () => ({ dataset: { act: "rdelalt", i: "0", a: "1" } }) } });
-  assert.deepStrictEqual(p._recipeDraft.ingredients[0].alts.map((a) => a.food), ["Latte"]);
+  p._onClick({ target: { closest: () => ({ dataset: { act: "rdelalt", rid: "r2", i: "0", a: "1" } }) } });
+  assert.deepStrictEqual(plain(p._rDrafts.r2.ingredients[0].alts.map((a) => a.food)), ["Latte"]);
 
-  p._onClick({ target: { closest: () => ({ dataset: { act: "raddingr" } }) } });
-  assert.equal(p._recipeDraft.ingredients.at(-1).alts.length, 1);
-  assert.equal(p._focus, '[data-ch="ring"][data-f="food"][data-i="2"][data-a="0"]');
+  p._onClick({ target: { closest: () => ({ dataset: { act: "raddingr", rid: "r2" } }) } });
+  assert.equal(p._rDrafts.r2.ingredients.at(-1).alts.length, 1);
+  assert.equal(p._focus, '[data-ch="ring"][data-rid="r2"][data-f="food"][data-i="2"][data-a="0"]');
 }
 {
   // Recipe row in a meal: every alternative of an ingredient has its own grams field (data-iid = alt id) and reset button.
@@ -511,8 +564,38 @@ const RECIPES = {
   p._wday = 3;
   assert.match(p._body(), /Nessun pasto con alternative/);
   p._view = "shop";
-  p._hass = { states: {} };
+  p._hass = { states: { "todo.spesa": { attributes: {} } } };
   assert.match(p._body(), /data-ch="cadence"/);
+  // Spesa: profile switches, no date range label, preview rows with per-row switches and a 3-state master switch.
+  assert.match(p._body(), /role="switch" class="switch" data-ch="sprof"/);
+  assert.doesNotMatch(p._body(), /Dal .* al /);
+  assert.match(p._body(), /Caricamento/);
+  p._shop.preview = ["Olio - 10 ml", "Pasta - 80 g"];
+  let html2 = p._body();
+  assert.match(html2, /class="page-head"><h2>Lista della spesa<\/h2>\s*<button class="primary" data-act="shop">/);
+  assert.match(html2, /aria-checked="true" data-act="shopall"/);
+  assert.match(html2, /data-ch="sitem" data-i="1" checked/);
+  p._shop.skip.add("Pasta - 80 g");
+  html2 = p._body();
+  assert.match(html2, /aria-checked="mixed" data-act="shopall"/);
+  assert.match(html2, /data-ch="sitem" data-i="1">/);
+  p._onClick({ target: { closest: () => ({ dataset: { act: "shopall" } }) } }); // mixed -> all on
+  assert.equal(p._shopAll(), "true");
+  p._onClick({ target: { closest: () => ({ dataset: { act: "shopall" } }) } }); // on -> all off
+  assert.equal(p._shopAll(), "false");
+  assert.match(p._body(), /data-act="shop" disabled/);
+  // The add call excludes skipped rows; no todo entity = preview only.
+  const sent = [];
+  p._hass.callWS = async (m) => { sent.push(m); return { items: ["Olio - 10 ml"] }; };
+  p._shop.skip = new Set(["Pasta - 80 g"]);
+  p.dispatchEvent = () => {};
+  p._flash = (m) => { throw new Error(m); };
+  await p._runShop();
+  assert.deepEqual(plain(sent[0]).exclude, ["Pasta - 80 g"]);
+  assert.equal(sent[0].todo_entity_id, "todo.spesa");
+  await p._loadShop();
+  assert.equal("todo_entity_id" in sent[1], false);
+  assert.deepEqual(plain(p._shop.preview), ["Olio - 10 ml"]);
 }
 {
   // Oggi: all profiles, grouped by meal name (case/spaces ignored); totals summed per food+unit and per recipe ingredient;
@@ -587,5 +670,55 @@ const RECIPES = {
   assert.equal(p._profileId, "p2");
   assert.equal(p._draft.name, "Bruna");
   assert.equal(p._dirty, true);
+}
+
+{
+  // Profili: reminder settings only when "Promemoria" is on; per day, one button per timed meal toggles its notification.
+  const meals = [
+    { id: "m1", name: "Pranzo", time: "13:00", options: [[{ alts: [{ food: "Pasta", qty: 80, unit: "g", note: "" }] }]] },
+    { id: "m2", name: "Spuntino", time: null, options: [[{ alts: [{ food: "Mela", qty: 1, unit: "pz", note: "" }] }]] },
+  ];
+  const week = {}; for (let d = 0; d < 7; d++) week[d] = d === 0 ? meals : [];
+  const prof = { id: "p1", name: "Anna", person: null, reminder: { enabled: false, minutes: 15, notify: null },
+    week, exceptions: {}, choices: { defaults: {}, dates: {} }, rev: 1, recipe_qty: {} };
+  const p = new SharedDietPanel();
+  p._render = () => {};
+  p._hass = { states: {}, services: {} };
+  p._recipes = {};
+  p._profiles = { p1: prof };
+  p._profileId = "p1";
+  p._draft = plain(prof);
+  p._view = "profiles";
+  assert.doesNotMatch(p._body(), /Minuti prima|Servizio notifica|data-act="remind"/);
+  p._onChange({ target: { checked: true, type: "checkbox", dataset: { ch: "pfield", pid: "p1", f: "rem.on" } } });
+  let html = p._body();
+  assert.match(html, /Minuti prima[\s\S]*Servizio notifica/);
+  assert.match(html, /class="chip on" data-act="remind" data-pid="p1" data-d="0" data-mid="m1" aria-pressed="true">Pranzo<\/button>/);
+  assert.doesNotMatch(html, /data-mid="m2"/); // no time, never notified
+  const click = () => p._onClick({ target: { closest: () => ({ dataset: { act: "remind", pid: "p1", d: "0", mid: "m1" } }) } });
+  click();
+  assert.equal(p._draft.week[0][0].remind, false);
+  assert.match(p._body(), /class="chip" data-act="remind"[^>]*aria-pressed="false"/);
+  assert.equal(cleanProfile(p._draft).week[0][0].remind, false);
+  click();
+  assert.ok(!("remind" in p._draft.week[0][0]));
+  assert.ok(!("remind" in cleanProfile(p._draft).week[0][0]));
+
+  // "Tutti i pasti": 3-state switch over the timed meals; all on -> all off, mixed/off -> all on.
+  p._draft.week[1] = [{ ...meals[0], id: "m3", name: "Cena", time: "20:00" }];
+  const all = () => p._onClick({ target: { closest: () => ({ dataset: { act: "remindall", pid: "p1" } }) } });
+  const state = () => p._body().match(/data-act="remindall"/) && p._body().match(/aria-checked="(\w+)" data-act="remindall"/)[1];
+  assert.equal(state(), "true");
+  click();
+  assert.equal(state(), "mixed");
+  all();
+  assert.equal(state(), "true");
+  assert.ok(!("remind" in p._draft.week[0][0]) && !("remind" in p._draft.week[1][0]));
+  all();
+  assert.equal(state(), "false");
+  assert.equal(p._draft.week[0][0].remind, false);
+  assert.equal(p._draft.week[1][0].remind, false);
+  assert.ok(!("remind" in p._draft.week[0][1])); // untimed meal untouched
+  assert.match(p._body(), /role="switch" class="switch" data-ch="pfield" data-pid="p1" data-f="rem.on" checked/);
 }
 console.log("resolve.test.mjs: all assertions passed");
