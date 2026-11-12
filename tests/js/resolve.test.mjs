@@ -7,13 +7,13 @@ import { fileURLToPath } from "node:url";
 const panel = fileURLToPath(new URL("../../custom_components/shared_diet/frontend/shared-diet-panel.js", import.meta.url));
 const ctx = {
   // The panel constructor calls attachShadow(); a plain stub is enough for rendering helpers.
-  HTMLElement: class { attachShadow() { this.shadowRoot = { addEventListener() {} }; } },
+  HTMLElement: class { attachShadow() { this.shadowRoot = { addEventListener() {}, getElementById: () => null, querySelectorAll: () => [] }; } },
   customElements: { get: () => undefined, define() {} },
   crypto: globalThis.crypto, // uid() in the panel
 };
 vm.createContext(ctx);
-const { expandItem, fmtItem, resolveMeal, cleanProfile, cleanRecipe, setRecipeQty, matchRecipes, SharedDietPanel } = vm.runInContext(
-  `${readFileSync(panel, "utf8")}\n;({ expandItem, fmtItem, resolveMeal, cleanProfile, cleanRecipe, setRecipeQty, matchRecipes, SharedDietPanel });`, ctx);
+const { expandItem, fmtItem, resolveMeal, cleanProfile, cleanRecipe, setRecipeQty, matchRecipes, cadenceRange, sumItems, SharedDietPanel } = vm.runInContext(
+  `${readFileSync(panel, "utf8")}\n;({ expandItem, fmtItem, resolveMeal, cleanProfile, cleanRecipe, setRecipeQty, matchRecipes, cadenceRange, sumItems, SharedDietPanel });`, ctx);
 // Recipe draft cleaning: trims, drops alternatives without food and ingredients left without any, keeps ids and rev, rejects negative quantities.
 {
   const cleaned = cleanRecipe({ id: "r1", name: "  Pancake ", note: " Mescolare ", rev: 3, ingredients: [
@@ -190,7 +190,7 @@ const RECIPES = {
   assert.doesNotMatch(oggi, /undefined|NaN/);
 
   panelEl._showAlts = true;
-  assert.match(panelEl._resolved(profile, iso, true), /class="alts"[\s\S]*Pancake/);
+  assert.match(panelEl._today(iso, "00:00", true), /class="alts"[\s\S]*Pancake/);
 
   panelEl._view = "week";
   panelEl._foldToggled.add(`w${panelEl._wday}:m1`); // unfold the meal editor
@@ -209,7 +209,6 @@ const RECIPES = {
   assert.match(panelEl._body(), /<p class="muted summary">Pancake \/ Latte<\/p>/);
 
   panelEl._view = "choices";
-  panelEl._range = { from: iso, to: iso };
   const choices = panelEl._body();
   assert.match(choices, /<option value="0" selected>Pancake<\/option>/);
   assert.match(choices, /<option value="1">Latte<\/option>/);
@@ -354,11 +353,13 @@ const RECIPES = {
   const p = new SharedDietPanel();
   p._recipes = RECIPES;
   const today = new Date(); const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-  assert.match(p._resolved(profile, iso), /Latte 100 ml/);
-  assert.doesNotMatch(p._resolved(profile, iso), /Alternativa a/);
+  p._profiles = { p1: profile };
+  assert.match(p._today(iso, "00:00"), /Latte 100 ml/);
+  assert.doesNotMatch(p._today(iso, "00:00"), /Alternativa a/);
   const withChoice = { ...profile, choices: { defaults: { m2: { option: 0, lines: {}, recipes: { r2: { i4: "a5" } } } }, dates: {} } };
-  assert.match(p._resolved(withChoice, iso), /Soia 90 ml/);
-  assert.match(p._resolved(withChoice, iso, true), /<li class="muted">Alternativa a Soia: Latte 100 ml<\/li>/);
+  p._profiles = { p1: withChoice };
+  assert.match(p._today(iso, "00:00"), /Soia 90 ml/);
+  assert.match(p._today(iso, "00:00", true), /<li class="muted">Alternativa a Soia: Latte 100 ml<\/li>/);
 }
 {
   // Same recipe on two lines of the chosen path: one select per ingredient, not one per line.
@@ -436,7 +437,6 @@ const RECIPES = {
   p._profiles = { p1: p._draft };
   p._profileId = "p1";
   p._view = "choices";
-  p._range = { from: "2026-11-10", to: "2026-11-10" };
   assert.match(p._body(), /Caffè freddo · Ingrediente 2/);
 }
 
@@ -478,13 +478,114 @@ const RECIPES = {
   p._profiles = { p1: profile };
   p._profileId = "p1";
   p._draft = plain(profile);
-  for (const view of ["today", "dates", "choices"]) {
+  for (const view of ["today", "choices"]) {
     p._view = view;
-    p._range = { from: iso, to: iso };
     assert.match(p._body(), /Pasta/, view);
   }
   p._choiceSlot("", "constructor", true).option = 0;
   assert.ok(Object.hasOwn(p._draft.choices.defaults, "constructor"));
   assert.equal(typeof ({}).constructor, "function");
+}
+{
+  // Spesa: cadence sets the range from today; Scelte has weekday chips and no per-date override.
+  assert.deepEqual(plain(cadenceRange("1w", "2026-11-12")), { from: "2026-11-12", to: "2026-11-18" });
+  assert.deepEqual(plain(cadenceRange("2w", "2026-11-12")), { from: "2026-11-12", to: "2026-11-25" });
+  assert.deepEqual(plain(cadenceRange("1m", "2026-11-12")), { from: "2026-11-12", to: "2026-12-11" });
+  assert.deepEqual(plain(cadenceRange("1m", "2026-12-31")), { from: "2026-12-31", to: "2027-01-30" });
+  const meal = { id: "m1", name: "Pranzo", time: "13:00", options: [[{ alts: [{ food: "Pasta", qty: 80, unit: "g", note: "" }, { food: "Riso", qty: 70, unit: "g", note: "" }] }]] };
+  const week = {}; for (let d = 0; d < 7; d++) week[d] = d === 2 ? [meal] : [];
+  const profile = { id: "p1", name: "Luca", person: null, reminder: { enabled: false, minutes: 15, notify: null },
+    week, exceptions: {}, choices: { defaults: {}, dates: {} }, rev: 1, recipe_qty: {} };
+  const p = new SharedDietPanel();
+  p._recipes = {};
+  p._profiles = { p1: profile };
+  p._profileId = "p1";
+  p._draft = plain(profile);
+  p._view = "choices";
+  p._wday = 2;
+  const html = p._body();
+  assert.match(html, /data-act="wday" data-d="6"/);
+  assert.match(html, /<h2>Mercoledì<\/h2>/);
+  assert.match(html, /data-ch="cline" data-date="" data-mid="m1"/);
+  assert.doesNotMatch(html, /Ritocca|type="date"/);
+  p._wday = 3;
+  assert.match(p._body(), /Nessun pasto con alternative/);
+  p._view = "shop";
+  p._hass = { states: {} };
+  assert.match(p._body(), /data-ch="cadence"/);
+}
+{
+  // Oggi: all profiles, grouped by meal name (case/spaces ignored); totals summed per food+unit and per recipe ingredient;
+  // each person's portion under the totals; the next meal from "now" is highlighted.
+  const R = { r1: { id: "r1", name: "Pancake", note: "Mescolare", rev: 1, ingredients: [{ id: "i1", alts: [{ id: "a1", food: "Farina", qty: 60, unit: "g" }] }] } };
+  const f = (food, qty, unit = "g") => ({ food, qty, unit, note: "" });
+  const mk = (id, name, meals) => { const week = {}; for (let d = 0; d < 7; d++) week[d] = meals;
+    return { id, name, person: null, reminder: { enabled: false, minutes: 15, notify: null }, week, exceptions: {},
+      choices: { defaults: {}, dates: {} }, rev: 1, recipe_qty: {} }; };
+  const a = mk("p1", "Anna", [
+    { id: "a1", name: "Colazione", time: "07:30", options: [[{ alts: [f("Latte", 100, "ml")] }, { alts: [{ recipe: "r1" }] }]] },
+    { id: "a2", name: "Pranzo", time: "13:00", options: [[{ alts: [f("Pasta", 80)] }, { alts: [f("Sale", null)] }]] },
+  ]);
+  const b = mk("p2", "Bruno", [
+    { id: "b1", name: "colazione ", time: "08:00", options: [[{ alts: [f("latte", 150, "ml")] }, { alts: [{ recipe: "r1" }] }]] },
+    { id: "b2", name: "Pranzo", time: "12:30", options: [[{ alts: [f("Pasta", 100)] }, { alts: [f("Sale", null)] }]] },
+  ]);
+  b.recipe_qty = { r1: { a1: 40 } };
+  const p = new SharedDietPanel();
+  p._recipes = R;
+  p._profiles = { p1: a, p2: b };
+  const html = p._today("2026-11-12", "09:00");
+  const cards = html.split('<section class="card').slice(1);
+  assert.equal(cards.length, 2);
+  assert.match(cards[0], /Colazione[\s\S]*07:30[\s\S]*Totale[\s\S]*Latte 250 ml[\s\S]*Pancake[\s\S]*Farina 100 g[\s\S]*Anna[\s\S]*Latte 100 ml[\s\S]*Bruno[\s\S]*latte 150 ml/);
+  assert.equal((cards[0].match(/Preparazione/g) ?? []).length, 1); // in the totals only
+  assert.match(cards[1], /^ next"[\s\S]*Prossimo[\s\S]*12:30[\s\S]*Pasta 180 g/);
+  assert.equal((cards[1].match(/<li>Sale<\/li>/g) ?? []).length, 3); // totals once + each person
+  assert.doesNotMatch(p._today("2026-11-12", "21:00"), /Prossimo/);
+  assert.doesNotMatch(html, /undefined|NaN/);
+  assert.deepEqual(plain(sumItems([f("Olio", 0.1), f("olio", 0.2)])), [f("Olio", 0.3)]);
+
+  // No totals when the people's meals share no food, nor for a meal of one person; the recipe note then shows per person.
+  const c = mk("p3", "Carla", [
+    { id: "c1", name: "Colazione", time: "07:00", options: [[{ alts: [f("Tè", 1, "tazza")] }]] },
+    { id: "c2", name: "Merenda", time: "17:00", options: [[{ alts: [{ recipe: "r1" }] }]] },
+  ]);
+  p._profiles = { p1: a, p3: c };
+  const [colazione, pranzo, merenda] = p._today("2026-11-12", "09:00").split('<section class="card').slice(1);
+  assert.doesNotMatch(colazione, /Totale/); // Latte + Pancake vs Tè
+  assert.doesNotMatch(pranzo, /Totale/); // Anna only
+  assert.doesNotMatch(merenda, /Totale/); // Carla only
+  assert.match(merenda, /Preparazione/);
+
+  // Every timed meal of today already past: Oggi shows tomorrow, its first meal highlighted.
+  const d = new Date();
+  if (d.getHours() || d.getMinutes()) { // at 00:00 exactly a 00:00 meal is still ahead
+    p._profiles = { p1: mk("p1", "Anna", [{ id: "x", name: "Notte", time: "00:00", options: [[{ alts: [f("Acqua", 1, "l")] }]] }]) };
+    p._view = "today";
+    assert.match(p._body(), /<h2>Domani · [\s\S]*class="card next"[\s\S]*Prossimo/);
+  }
+}
+
+{
+  // Profili: one card per profile, no profile select; editing another card switches the draft; delete targets its card.
+  const mk = (id, name) => ({ id, name, person: null, reminder: { enabled: false, minutes: 15, notify: null },
+    week: { 0: [], 1: [], 2: [], 3: [], 4: [], 5: [], 6: [] }, exceptions: {}, choices: { defaults: {}, dates: {} }, rev: 1, recipe_qty: {} });
+  const p = new SharedDietPanel();
+  p._render = () => {};
+  p._hass = { states: {}, services: {} };
+  p._recipes = {};
+  p._profiles = { p1: mk("p1", "Anna"), p2: mk("p2", "Bruno") };
+  p._profileId = "p1";
+  p._draft = plain(p._profiles.p1);
+  p._view = "profiles";
+  const html = p._body();
+  assert.doesNotMatch(html, /data-ch="pick"/);
+  assert.equal((html.match(/<section class="card">/g) ?? []).length, 2);
+  assert.match(html, /value="Bruno" data-ch="pfield" data-pid="p2"/);
+  assert.match(html, /data-act="delprofile" data-pid="p2"/);
+  p._onChange({ target: { value: "Bruna", type: "text", dataset: { ch: "pfield", pid: "p2", f: "name" } } });
+  assert.equal(p._profileId, "p2");
+  assert.equal(p._draft.name, "Bruna");
+  assert.equal(p._dirty, true);
 }
 console.log("resolve.test.mjs: all assertions passed");

@@ -1,13 +1,11 @@
 /* Dieta: pannello laterale di Shared Diet. Web component vanilla, nessuna dipendenza. */
 
 const TABS = [
-  ["today", "Oggi"], ["week", "Settimana"], ["dates", "Date"],
-  ["choices", "Scelte"], ["recipes", "Ricette"], ["shop", "Spesa"], ["profiles", "Profili"],
+  ["today", "Oggi"], ["week", "Settimana"], ["choices", "Scelte"], ["recipes", "Ricette"], ["shop", "Spesa"], ["profiles", "Profili"],
 ];
 const DAYS = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato", "Domenica"];
 const DAYS_SHORT = ["Lun", "Mar", "Mer", "Gio", "Ven", "Sab", "Dom"];
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const MAX_SPAN = 62;
+const CADENCES = [["1w", "Settimanale"], ["2w", "Ogni 2 settimane"], ["1m", "Mensile"]];
 
 const CSS = `
 :host { display: block; height: 100%; overflow-y: auto; box-sizing: border-box;
@@ -43,6 +41,7 @@ input, select { padding: 6px 8px; min-width: 0; max-width: 100%; border: 1px sol
 .sub-row, .check { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
 .card { background: var(--card-background-color, #fff); border: 1px solid var(--divider-color, #e0e0e0);
   border-radius: 12px; padding: 12px; margin: 10px 0; }
+.card.next { border: 2px solid var(--primary-color, #03a9f4); }
 .meal-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .sub { margin: 8px 0 4px; font-size: 12px; color: var(--secondary-text-color, #727272);
   text-transform: uppercase; letter-spacing: 0.04em; }
@@ -95,7 +94,13 @@ const pad = (n) => String(n).padStart(2, "0");
 const iso = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const parseIso = (s) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
 const addDays = (s, n) => { const d = parseIso(s); d.setDate(d.getDate() + n); return iso(d); };
-const span = (a, b) => Math.round((parseIso(b) - parseIso(a)) / 864e5) + 1;
+// Shopping range for a cadence, starting today: 7 or 14 days, or up to the day before the same date next month.
+const cadenceRange = (cadence, from = iso(new Date())) => {
+  if (cadence !== "1m") return { from, to: addDays(from, cadence === "2w" ? 13 : 6) };
+  const d = parseIso(from);
+  d.setMonth(d.getMonth() + 1, d.getDate() - 1); // Jan 31 -> Mar 2: overflow is fine, still under the 62-day cap
+  return { from, to: iso(d) };
+};
 const weekday = (s) => (parseIso(s).getDay() + 6) % 7; // 0 = lunedì, as in model.py
 const fmtDay = (s, opts) => parseIso(s).toLocaleDateString("it-IT", opts);
 // Mirrors model.py format_item: "Nome 80 g", "Nome (nota)", "Nome", "Ricetta: ingredienti".
@@ -106,8 +111,6 @@ const fmtItem = (it) => {
 };
 const blankItem = () => ({ food: "", qty: null, unit: "g", note: "" });
 const newMeal = () => ({ id: uid(), name: "", time: null, options: [[{ alts: [blankItem()] }]] });
-// Meal editor context: "w<weekday>" in Settimana, "x<ISO date>" in Date (see _list).
-const isWeekCtx = (ctx) => ctx[0] === "w";
 // Comparison key for food names: case, accents and repeated spaces ignored ("Caffè " ~ "caffe").
 const foldText = (s) => s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().trim().replace(/\s+/g, " ");
 // Selector of a food input in the meal editor (to focus a just-added field).
@@ -167,6 +170,24 @@ function matchRecipes(q, recipes) {
     .filter((r) => foldText(r.name).includes(q))
     .sort((a, b) => (foldText(b.name).startsWith(q) - foldText(a.name).startsWith(q)) || a.name.localeCompare(b.name, "it"))
     .slice(0, 6);
+}
+// Totals of resolved items (Oggi, several people): same food and unit summed; a recipe keeps its name and sums its ingredients.
+// Items without a quantity are listed once.
+function sumItems(items) {
+  const add = (map, it) => {
+    const k = `${foldText(it.food)}|${it.unit ?? ""}|${it.qty === null}`;
+    const cur = map.get(k);
+    if (!cur) map.set(k, { ...it });
+    else if (cur.qty !== null) cur.qty = Math.round((cur.qty + it.qty) * 1000) / 1000;
+  };
+  const rows = new Map();
+  for (const it of items) {
+    if (!("recipe" in it)) { add(rows, it); continue; }
+    const k = `recipe|${it.recipe}`;
+    if (!rows.has(k)) rows.set(k, { ...it, parts: new Map() });
+    for (const g of it.ingredients) add(rows.get(k).parts, g);
+  }
+  return [...rows.values()].map(({ parts, ...r }) => (parts ? { ...r, ingredients: [...parts.values()] } : r));
 }
 function resolveMeal(meal, choice, profile, recipes) {
   const opt = choice.option >= 0 && choice.option < meal.options.length ? choice.option : 0;
@@ -300,15 +321,15 @@ class SharedDietPanel extends HTMLElement {
     this._recipeDraft = null;
     this._recipeDirty = false;
     this._newRecipe = ""; // new-recipe name, kept across re-renders
-    // "ctx:mealId" of meals whose fold state differs from the default (Settimana: folded, Date: open). View-only.
+    // "ctx:mealId" of meals whose fold state differs from the default (default: folded). View-only.
     this._foldToggled = new Set();
     this._busy = false;
     this._narrow = false;
     this._showAlts = false;
-    this._date = today; // Date view
-    this._wday = weekday(today); // Settimana view
-    this._range = { from: today, to: addDays(today, 6) }; // Scelte view
-    this._shop = { from: today, to: addDays(today, 6), off: new Set(), todo: "", items: null };
+    this._wday = weekday(today); // Settimana and Scelte views
+    let cadence = "1w";
+    try { cadence = localStorage.getItem("shared_diet.cadence") ?? "1w"; } catch { /* storage blocked */ }
+    this._shop = { cadence: CADENCES.some(([k]) => k === cadence) ? cadence : "1w", off: new Set(), todo: "", items: null };
     this.shadowRoot.addEventListener("click", (e) => this._onClick(e));
     this.shadowRoot.addEventListener("change", (e) => this._onChange(e));
     this.shadowRoot.addEventListener("input", (e) => this._onInput(e));
@@ -413,9 +434,12 @@ class SharedDietPanel extends HTMLElement {
 
   connectedCallback() {
     if (this._hass && !this._unsub) this._subscribe();
+    // Oggi has no inputs: re-render each minute so the next-meal highlight follows the clock.
+    this._tick = setInterval(() => { if (this._view === "today" && !this._busy) this._render(); }, 60000);
   }
 
   disconnectedCallback() {
+    clearInterval(this._tick);
     this._unsub?.then((unsub) => unsub?.(), () => {});
     this._unsub = null;
     document.getElementById("shared-diet-error")?.remove(); // don't leave it over other HA pages
@@ -445,7 +469,7 @@ class SharedDietPanel extends HTMLElement {
     // A dirty editor is only annotated: re-rendering it would drop focus and the caret mid-typing.
     const editing = this._view === "recipes"
       ? this._recipeDirty
-      : this._dirty && ["week", "dates", "choices", "profiles"].includes(this._view);
+      : this._dirty && ["week", "choices", "profiles"].includes(this._view);
     if (editing) {
       const el = this.shadowRoot.getElementById("notice");
       if (el) {
@@ -547,7 +571,8 @@ class SharedDietPanel extends HTMLElement {
 
   _markDirty() {
     this._dirty = true;
-    this.shadowRoot.getElementById("save")?.removeAttribute("hidden"); // no re-render while typing
+    // No re-render while typing. Profili has one Save per card: show only the edited profile's.
+    for (const b of this.shadowRoot.querySelectorAll('[data-act="save"]')) b.hidden = b.dataset.pid ? b.dataset.pid !== this._profileId : false;
   }
 
   // Errors: red toast, 8 s or until tapped. HA's own toast (used for success) has no error style.
@@ -630,9 +655,9 @@ class SharedDietPanel extends HTMLElement {
     }, "Profilo creato");
   }
 
-  _deleteProfile() {
-    const id = this._profileId;
-    if (!confirm(`Eliminare il profilo «${this._draft.name}»? L'operazione non si annulla.`)) return;
+  _deleteProfile(id = this._profileId) {
+    if (!this._profiles[id]) return;
+    if (!confirm(`Eliminare il profilo «${this._profiles[id].name}»? L'operazione non si annulla.`)) return;
     return this._run(async () => {
       await this._hass.callWS({ type: "shared_diet/delete_profile", profile_id: id });
       if (this._profileId === id) {
@@ -693,8 +718,7 @@ class SharedDietPanel extends HTMLElement {
   }
 
   _runShop() {
-    const { from, to } = this._shop;
-    if (!DATE_RE.test(from) || !DATE_RE.test(to) || from > to) return this._flash("Intervallo non valido");
+    const { from, to } = cadenceRange(this._shop.cadence);
     const todo = this._todo();
     if (!todo) return this._flash("Nessuna lista To-do disponibile");
     const ids = Object.keys(this._profiles);
@@ -712,9 +736,9 @@ class SharedDietPanel extends HTMLElement {
     }, "Lista della spesa aggiornata");
   }
 
-  // Meal list addressed by ctx: "w<weekday>" for the weekly schema, "x<date>" for an exception.
+  // Meal list addressed by ctx: "w<weekday>" (weekly schema).
   _list(ctx) {
-    return ctx[0] === "w" ? this._draft.week[ctx.slice(1)] : this._draft.exceptions[ctx.slice(1)];
+    return this._draft.week[ctx.slice(1)];
   }
 
   // Choice object for a meal: date override when date is set, else the per-meal default.
@@ -750,7 +774,7 @@ class SharedDietPanel extends HTMLElement {
         return this._edit();
       case "save": return this._save();
       case "create": return this._createProfile();
-      case "delprofile": return this._deleteProfile();
+      case "delprofile": return this._deleteProfile(d.pid);
       case "rcreate": return this._createRecipe();
       case "rsave": return this._saveRecipe();
       case "rdelete": return this._deleteRecipe();
@@ -776,24 +800,6 @@ class SharedDietPanel extends HTMLElement {
       case "shop": return this._runShop();
       case "alts": this._showAlts = !this._showAlts; return this._render();
       case "wday": this._wday = Number(d.d); return this._render();
-      case "mkex":
-        this._draft.exceptions[d.date] = clone(this._draft.week[String(weekday(d.date))]);
-        return this._edit();
-      case "delex":
-        if (!confirm("Eliminare l'eccezione? Torna lo schema settimanale.")) return;
-        delete this._draft.exceptions[d.date];
-        return this._edit();
-      case "ov": {
-        const day = (this._draft.choices.dates[d.date] ??= {});
-        day[d.mid] = clone(own(this._draft.choices.defaults, d.mid) ?? zeroChoice());
-        return this._edit();
-      }
-      case "clrov": {
-        const day = this._draft.choices.dates[d.date];
-        delete day[d.mid];
-        if (!Object.keys(day).length) delete this._draft.choices.dates[d.date];
-        return this._edit();
-      }
     }
     if (!d.ctx) return;
     const list = this._list(d.ctx);
@@ -801,7 +807,7 @@ class SharedDietPanel extends HTMLElement {
     switch (d.act) {
       case "addmeal":
         list.push(newMeal());
-        if (isWeekCtx(d.ctx)) this._foldToggled.add(`${d.ctx}:${list.at(-1).id}`); // a new meal opens for filling in
+        this._foldToggled.add(`${d.ctx}:${list.at(-1).id}`); // a new meal opens for filling in
         this._focus = `[data-ch="meal"][data-f="name"][data-ctx="${d.ctx}"][data-i="${list.length - 1}"]`;
         break;
       case "lup":
@@ -883,15 +889,9 @@ class SharedDietPanel extends HTMLElement {
     if (this._busy) return; // the success path replaces the draft, so an edit now would be lost
     switch (d.ch) {
       case "pick": return this._selectProfile(el.value);
-      case "date":
-        if (!el.value) return;
-        this._date = el.value;
-        return this._render();
-      case "range":
-        this._range[d.f] = el.value;
-        return this._render();
-      case "srange":
-        this._shop[d.f] = el.value;
+      case "cadence":
+        this._shop.cadence = el.value;
+        try { localStorage.setItem("shared_diet.cadence", el.value); } catch { /* storage blocked */ }
         return this._render();
       case "rpick": return this._selectRecipe(el.value);
       case "rfield":
@@ -908,6 +908,14 @@ class SharedDietPanel extends HTMLElement {
         else this._shop.off.add(d.id);
         return;
       case "pfield": {
+        if (d.pid !== this._profileId) {
+          // Editing another profile's card: it becomes the draft. Unsaved edits elsewhere need a confirm and a re-render.
+          const wasDirty = this._dirty;
+          if (!this._canDiscard()) return this._render();
+          this._profileId = d.pid;
+          this._load(this._profiles[d.pid]);
+          if (wasDirty) this._render();
+        }
         const p = this._draft;
         const v = el.type === "checkbox" ? el.checked : el.value;
         if (d.f === "name") p.name = v;
@@ -980,7 +988,7 @@ class SharedDietPanel extends HTMLElement {
     if (this._loadError) return `<p class="msg err">${esc(this._loadError)}</p>`;
     if (!this._profiles) return `<p class="muted">Caricamento…</p>`;
     const views = {
-      today: () => this._vToday(), week: () => this._vWeek(), dates: () => this._vDates(),
+      today: () => this._vToday(), week: () => this._vWeek(),
       choices: () => this._vChoices(), recipes: () => this._vRecipes(), shop: () => this._vShop(), profiles: () => this._vProfiles(),
     };
     return `<div id="notice">${this._noticeHtml()}</div>` + views[this._view]() + this._datalists();
@@ -1010,102 +1018,104 @@ class SharedDietPanel extends HTMLElement {
     return `<datalist id="units">${units.map((u) => `<option value="${esc(u)}">`).join("")}</datalist>`;
   }
 
-  // Read-only resolved meals for a date (choices applied), optionally with all alternatives.
-  _resolved(p, s, withAlts = false) {
-    const meals = effectiveDay(p, s);
-    if (!meals.length) return `<p class="muted">Nessun pasto.</p>`;
-    // Recipe: name, ingredients with the person's grams, preparation note folded away.
-    // With "Vedi alternative": the ingredients' other alternatives, greyed out, after the chosen ones.
-    const otherAlts = (i) => (withAlts ? i.choices.map((c) => {
+  // Read-only resolved items as <li>. Recipe: name, ingredients with grams, preparation note folded away (withNote).
+  // With "Vedi alternative": the ingredients' other alternatives, greyed out, after the chosen ones.
+  _itemsHtml(items, { withAlts = false, withNote = true } = {}) {
+    const otherAlts = (i) => (withAlts ? (i.choices ?? []).map((c) => {
       const chosen = c.alts.find((a) => a.id === c.chosen);
       const others = c.alts.filter((a) => a.id !== c.chosen).map((a) => fmtItem(a)).join(" / ");
       return `<li class="muted">Alternativa a ${esc(chosen.food)}: ${esc(others)}</li>`;
     }).join("") : "");
-    const itemHtml = (i) => ("recipe" in i
+    return items.map((i) => ("recipe" in i
       ? `<li><strong>${esc(i.food)}</strong>${i.ingredients.length
         ? `<ul class="muted">${i.ingredients.map((g) => `<li>${esc(fmtItem(g))}</li>`).join("")}${otherAlts(i)}</ul>` : ""}${
-        i.note.trim() ? `<details><summary>Preparazione</summary><p>${esc(i.note)}</p></details>` : ""}</li>`
-      : `<li>${esc(fmtItem(i))}</li>`);
-    return [...meals].sort(byTime).map((m) => {
-      const r = resolveMeal(m, choiceFor(p, s, m.id), p, this._recipes);
-      const alts = m.options.map((opt, oi) => `<li class="${oi === r.option ? "" : "muted"}">${m.options.length > 1 ? `Opzione ${oi + 1}: ` : ""}${
-        opt.map((l) => l.alts.map((a) => esc("recipe" in a ? itemLabel(a, this._recipes) : fmtItem(a))).join(" / ")).join(" + ")}</li>`).join("");
-      return `<section class="card">
-        <div class="meal-head"><strong>${esc(m.name)}</strong><span class="muted">${esc(m.time ?? "senza orario")}</span></div>
-        <ul>${r.items.map(itemHtml).join("")}</ul>
-        ${withAlts ? `<ul class="alts">${alts}</ul>` : ""}
+        withNote && i.note.trim() ? `<details><summary>Preparazione</summary><p>${esc(i.note)}</p></details>` : ""}</li>`
+      : `<li>${esc(fmtItem(i))}</li>`)).join("");
+  }
+
+  // Meals of a date for every profile, grouped by meal name (case/accents ignored), sorted by the group's earliest time.
+  _groups(s) {
+    const groups = new Map();
+    for (const p of Object.values(this._profiles)) {
+      for (const m of effectiveDay(p, s)) {
+        const k = foldText(m.name);
+        if (!groups.has(k)) groups.set(k, { name: m.name, time: m.time, rows: [] });
+        const g = groups.get(k);
+        if (m.time && (!g.time || m.time < g.time)) g.time = m.time; // earliest time of the group
+        g.rows.push({ p, m, r: resolveMeal(m, choiceFor(p, s, m.id), p, this._recipes) });
+      }
+    }
+    return [...groups.values()].sort(byTime);
+  }
+
+  // Meal groups of a date: summed totals, then each person's portion. The first group from `now` on is highlighted as next.
+  _today(s, now, withAlts = false) {
+    const list = this._groups(s);
+    if (!list.length) return `<p class="muted">Nessun pasto.</p>`;
+    const next = list.find((g) => g.time && g.time >= now);
+    // Same food (or recipe) for two people: comparison key of a resolved item.
+    const key = (i) => ("recipe" in i ? `recipe|${i.recipe}` : `${foldText(i.food)}|${i.unit ?? ""}`);
+    return list.map((g) => {
+      // Totals only when 2+ people share at least one food: one person, or entirely different meals, get none.
+      const seen = new Map(); // item key -> profile id that has it
+      const shared = new Set(g.rows.map((x) => x.p.id)).size > 1 && g.rows.some(({ p, r }) => r.items.some((i) => {
+        const k = key(i);
+        if (seen.has(k) && seen.get(k) !== p.id) return true;
+        seen.set(k, p.id);
+        return false;
+      }));
+      const people = g.rows.map(({ p, m, r }) => {
+        const alts = m.options.map((opt, oi) => `<li class="${oi === r.option ? "" : "muted"}">${m.options.length > 1 ? `Opzione ${oi + 1}: ` : ""}${
+          opt.map((l) => l.alts.map((a) => esc("recipe" in a ? itemLabel(a, this._recipes) : fmtItem(a))).join(" / ")).join(" + ")}</li>`).join("");
+        return `<div class="sub">${esc(p.name)}</div>
+          <ul>${this._itemsHtml(r.items, { withAlts, withNote: !shared })}</ul>
+          ${withAlts ? `<ul class="alts">${alts}</ul>` : ""}`;
+      }).join("");
+      return `<section class="card${g === next ? " next" : ""}">
+        <div class="meal-head"><strong>${esc(g.name)}${g === next ? `<span class="tag">Prossimo</span>` : ""}</strong>
+          <span class="muted">${esc(g.time ?? "senza orario")}</span></div>
+        ${shared ? `<div class="sub">Totale</div><ul>${this._itemsHtml(sumItems(g.rows.flatMap(({ r }) => r.items)))}</ul>` : ""}
+        ${people}
       </section>`;
     }).join("");
   }
 
   _vToday() {
-    const p = this._profiles[this._profileId];
-    if (!p) return this._picker();
-    const today = iso(new Date());
-    return `${this._picker()}
-      <h2>${esc(fmtDay(today, { weekday: "long", day: "numeric", month: "long" }))}</h2>
+    if (!Object.keys(this._profiles).length) return this._picker();
+    const d = new Date();
+    let day = iso(d);
+    let now = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    // Every timed meal of today is past: show tomorrow, so its first meal is the next one.
+    const timed = this._groups(day).filter((g) => g.time);
+    const tomorrow = timed.length > 0 && timed.every((g) => g.time < now);
+    if (tomorrow) [day, now] = [addDays(day, 1), "00:00"];
+    return `<h2>${tomorrow ? "Domani · " : ""}${esc(fmtDay(day, { weekday: "long", day: "numeric", month: "long" }))}</h2>
       <button data-act="alts">${this._showAlts ? "Nascondi alternative" : "Vedi alternative"}</button>
-      ${this._resolved(p, today, this._showAlts)}`;
+      ${this._today(day, now, this._showAlts)}`;
+  }
+
+  // Weekday chips (Settimana, Scelte) and the day heading.
+  _dayChips() {
+    const chips = DAYS_SHORT.map((d, i) => `<button class="chip${i === this._wday ? " on" : ""}" data-act="wday" data-d="${i}">${d}</button>`).join("");
+    return `<div class="chips" role="group">${chips}</div><h2>${DAYS[this._wday]}</h2>`;
   }
 
   _vWeek() {
     if (!this._draft) return this._picker();
-    const chips = DAYS_SHORT.map((d, i) => `<button class="chip${i === this._wday ? " on" : ""}" data-act="wday" data-d="${i}">${d}</button>`).join("");
-    return `${this._picker(true)}
-      <div class="chips" role="group">${chips}</div>
-      <h2>${DAYS[this._wday]}</h2>
+    return `${this._picker(true)}${this._dayChips()}
       ${this._mealEditor(`w${this._wday}`, this._draft.week[String(this._wday)])}`;
   }
 
-  _vDates() {
-    if (!this._draft) return this._picker();
-    const p = this._draft;
-    const s = this._date;
-    const body = p.exceptions[s]
-      ? `<p class="muted">Eccezione: sostituisce lo schema di ${DAYS[weekday(s)]}.</p>
-         ${this._mealEditor(`x${s}`, p.exceptions[s])}
-         <button class="danger" data-act="delex" data-date="${esc(s)}">Elimina eccezione</button>`
-      : `<p class="muted">Nessuna eccezione: vale lo schema di ${DAYS[weekday(s)]}.</p>
-         ${this._resolved(p, s)}
-         <button class="primary" data-act="mkex" data-date="${esc(s)}">Crea eccezione</button>`;
-    return `${this._picker(true)}
-      <label class="row">Data <input type="date" value="${esc(s)}" data-ch="date"></label>
-      <h2>${esc(fmtDay(s, { weekday: "long", day: "numeric", month: "long" }))}</h2>
-      ${body}`;
-  }
-
+  // Choices of the weekly schema's meals for the selected weekday (choices.defaults, by meal id).
   _vChoices() {
     if (!this._draft) return this._picker();
-    const { from, to } = this._range;
-    let cards = "";
-    if (!DATE_RE.test(from) || !DATE_RE.test(to) || from > to) cards = `<p class="msg err">Intervallo non valido.</p>`;
-    else if (span(from, to) > MAX_SPAN) cards = `<p class="msg err">Intervallo massimo di ${MAX_SPAN} giorni.</p>`;
-    else {
-      for (let s = from; s <= to; s = addDays(s, 1)) {
-        for (const m of effectiveDay(this._draft, s)) if (hasChoice(m, this._recipes)) cards += this._choiceCard(s, m);
-      }
-      if (!cards) cards = `<p class="muted">Nessun pasto con alternative nell'intervallo.</p>`;
-    }
-    return `${this._picker(true)}
-      <div class="row">Dal <input type="date" value="${esc(from)}" data-ch="range" data-f="from"> al
-        <input type="date" value="${esc(to)}" data-ch="range" data-f="to"></div>
-      ${cards}`;
-  }
-
-  _choiceCard(s, m) {
-    const mid = esc(m.id);
-    const ov = own(own(this._draft.choices.dates, s), m.id);
-    const def = own(this._draft.choices.defaults, m.id) ?? zeroChoice();
-    const dateBlock = ov
-      ? `${this._choiceEditor(s, m, ov)}<button data-act="clrov" data-date="${esc(s)}" data-mid="${mid}">Usa predefinito</button>`
-      : `<p class="muted">Usa il predefinito</p><button data-act="ov" data-date="${esc(s)}" data-mid="${mid}">Ritocca per questa data</button>`;
-    return `<section class="card">
-      <div class="meal-head"><strong>${esc(fmtDay(s, { weekday: "short", day: "numeric", month: "numeric" }))} · ${esc(m.name)}</strong></div>
-      <div class="sub">Predefinito</div>
-      ${this._choiceEditor("", m, def)}
-      <div class="sub">Questa data</div>
-      ${dateBlock}
-    </section>`;
+    const meals = [...this._draft.week[String(this._wday)]].sort(byTime).filter((m) => hasChoice(m, this._recipes));
+    const cards = meals.map((m) => `<section class="card">
+      <div class="meal-head"><strong>${esc(m.name)}</strong><span class="muted">${esc(m.time ?? "")}</span></div>
+      ${this._choiceEditor("", m, own(this._draft.choices.defaults, m.id) ?? zeroChoice())}
+    </section>`).join("");
+    return `${this._picker(true)}${this._dayChips()}
+      ${cards || `<p class="muted">Nessun pasto con alternative.</p>`}`;
   }
 
   _choiceEditor(date, m, choice) {
@@ -1152,9 +1162,12 @@ class SharedDietPanel extends HTMLElement {
     const items = this._shop.items === null ? ""
       : this._shop.items.length ? `<h3>Aggiunti alla lista</h3><ul>${this._shop.items.map((i) => `<li>${esc(i)}</li>`).join("")}</ul>`
       : `<p class="muted">Nessun alimento nell'intervallo.</p>`;
+    const { from, to } = cadenceRange(this._shop.cadence);
+    const day = (s) => esc(fmtDay(s, { weekday: "short", day: "numeric", month: "short" }));
     return `<h2>Lista della spesa</h2>
-      <div class="row">Dal <input type="date" value="${esc(this._shop.from)}" data-ch="srange" data-f="from"> al
-        <input type="date" value="${esc(this._shop.to)}" data-ch="srange" data-f="to"></div>
+      <label class="row">Cadenza <select data-ch="cadence">${CADENCES.map(([k, l]) =>
+        `<option value="${k}"${k === this._shop.cadence ? " selected" : ""}>${l}</option>`).join("")}</select></label>
+      <p class="muted">Dal ${day(from)} al ${day(to)}</p>
       <fieldset><legend>Profili</legend>${profiles}</fieldset>
       ${todoSel}
       <button class="primary" data-act="shop"${todo && !this._busy ? "" : " disabled"}>Aggiungi alla lista</button>
@@ -1216,29 +1229,34 @@ class SharedDietPanel extends HTMLElement {
     const head = `<h2>Profili</h2>
       <div class="row"><input data-newname value="${esc(this._newName)}" placeholder="Nome del nuovo profilo" aria-label="Nome nuovo profilo">
         <button data-act="create">Crea profilo</button></div>`;
-    const p = this._draft;
-    if (!p) return head;
     const persons = Object.keys(this._hass.states).filter((e) => e.startsWith("person.")).sort();
     const notifies = Object.entries(this._hass.services.notify ?? {})
       .filter(([n, svc]) => n !== "send_message" && !svc.fields?.entity_id)
       .map(([n]) => `notify.${n}`).sort();
-    const select = (field, current, list, empty, label = (v) => v) => {
-      const all = current && !list.includes(current) ? [current, ...list] : list;
-      return `<select data-ch="pfield" data-f="${field}"><option value="">${empty}</option>${all.map((v) =>
-        `<option value="${esc(v)}"${v === current ? " selected" : ""}>${esc(label(v))}</option>`).join("")}</select>`;
-    };
-    return `${head}${this._picker(true)}
-      <section class="card">
-        <label class="sub-row">Nome <input value="${esc(p.name)}" data-ch="pfield" data-f="name"></label>
+    // One card per profile. The profile being edited shows its draft; editing another card switches the draft to it.
+    const card = (id) => {
+      const p = id === this._profileId && this._draft ? this._draft : this._profiles[id];
+      const pid = `data-pid="${esc(id)}"`;
+      const select = (field, current, list, empty, label = (v) => v) => {
+        const all = current && !list.includes(current) ? [current, ...list] : list;
+        return `<select data-ch="pfield" ${pid} data-f="${field}"><option value="">${empty}</option>${all.map((v) =>
+          `<option value="${esc(v)}"${v === current ? " selected" : ""}>${esc(label(v))}</option>`).join("")}</select>`;
+      };
+      const dirty = id === this._profileId && this._dirty;
+      return `<section class="card">
+        <label class="sub-row">Nome <input value="${esc(p.name)}" data-ch="pfield" ${pid} data-f="name"></label>
         <label class="sub-row">Persona collegata ${select("person", p.person, persons, "Nessuna", (v) => this._hass.states[v]?.attributes.friendly_name ?? v)}</label>
-      </section>
-      <section class="card">
-        <label class="check"><input type="checkbox" data-ch="pfield" data-f="rem.on"${p.reminder.enabled ? " checked" : ""}> Promemoria</label>
+        <label class="check"><input type="checkbox" data-ch="pfield" ${pid} data-f="rem.on"${p.reminder.enabled ? " checked" : ""}> Promemoria</label>
         <label class="sub-row">Minuti prima del pasto
-          <input type="number" min="0" max="240" step="1" value="${esc(p.reminder.minutes)}" data-ch="pfield" data-f="rem.min"></label>
+          <input type="number" min="0" max="240" step="1" value="${esc(p.reminder.minutes)}" data-ch="pfield" ${pid} data-f="rem.min"></label>
         <label class="sub-row">Servizio notifica ${select("rem.notify", p.reminder.notify, notifies, "Nessuno")}</label>
-      </section>
-      <button class="danger" data-act="delprofile">Elimina profilo</button>`;
+        <div class="row">
+          <button class="primary" data-act="save" ${pid}${dirty ? "" : " hidden"}${this._busy ? " disabled" : ""}>Salva</button>
+          <button class="danger" data-act="delprofile" ${pid}>Elimina profilo</button>
+        </div>
+      </section>`;
+    };
+    return head + Object.keys(this._profiles).map(card).join("");
   }
 
   _mealEditor(ctx, meals) {
@@ -1250,7 +1268,7 @@ class SharedDietPanel extends HTMLElement {
   _mealCard(ctx, m, i) {
     const at = `data-ctx="${esc(ctx)}" data-i="${i}"`;
     const key = `${ctx}:${m.id}`;
-    const folded = isWeekCtx(ctx) !== this._foldToggled.has(key);
+    const folded = !this._foldToggled.has(key);
     const head = `<div class="row">
         <input class="grow" value="${esc(m.name)}" data-ch="meal" data-f="name" ${at} placeholder="Pasto" aria-label="Nome pasto">
         <input type="time" value="${esc(m.time ?? "")}" data-ch="meal" data-f="time" ${at} aria-label="Orario">
