@@ -63,7 +63,7 @@ async def _setup_luca(hass, notify=None):
 
 
 async def test_sensors_reflect_current_and_next(hass, freezer):
-    freezer.move_to(at(10, 0))
+    freezer.move_to(at(10, 30))
     await _setup_luca(hass)
     assert hass.states.get("sensor.luca_pasto_attuale").state == "Colazione"
     nxt = hass.states.get("sensor.luca_prossimo_pasto")
@@ -74,7 +74,7 @@ async def test_sensors_reflect_current_and_next(hass, freezer):
 
 async def test_reminder_sent_minutes_before(hass, freezer):
     calls = async_mock_service(hass, "notify", "mobile_app_x")
-    freezer.move_to(at(10, 0))
+    freezer.move_to(at(10, 30))
     await _setup_luca(hass, notify="notify.mobile_app_x")
     freezer.move_to(at(12, 45))
     async_fire_time_changed(hass, at(12, 45))
@@ -86,7 +86,7 @@ async def test_reminder_sent_minutes_before(hass, freezer):
 
 async def test_reminder_skipped_for_meal_with_remind_off(hass, freezer):
     calls = async_mock_service(hass, "notify", "mobile_app_x")
-    freezer.move_to(at(10, 0))
+    freezer.move_to(at(10, 30))
     store = await _setup_entry(hass)
     await _add_profile(hass, store, "Luca", [COLAZIONE, {**PRANZO, "remind": False}], "notify.mobile_app_x")
     freezer.move_to(at(12, 45))
@@ -96,7 +96,7 @@ async def test_reminder_skipped_for_meal_with_remind_off(hass, freezer):
 
 
 async def test_missing_notify_service_does_not_break(hass, freezer, caplog):
-    freezer.move_to(at(10, 0))
+    freezer.move_to(at(10, 30))
     await _setup_luca(hass, notify="notify.non_esiste")
     freezer.move_to(at(12, 45))
     async_fire_time_changed(hass, at(12, 45))
@@ -109,7 +109,7 @@ async def test_missing_notify_service_does_not_break(hass, freezer, caplog):
 
 
 async def test_adding_and_deleting_profiles_does_not_reload_entry(hass, freezer):
-    freezer.move_to(at(10, 0))
+    freezer.move_to(at(10, 30))
     entry = MockConfigEntry(domain=DOMAIN)
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
@@ -133,7 +133,7 @@ async def test_adding_and_deleting_profiles_does_not_reload_entry(hass, freezer)
 
 
 async def test_deleting_profile_removes_its_entities(hass, freezer):
-    freezer.move_to(at(10, 0))
+    freezer.move_to(at(10, 30))
     store, profile_id = await _setup_luca(hass)
     registry = er.async_get(hass)
     assert registry.async_get("sensor.luca_pasto_attuale") is not None
@@ -156,7 +156,7 @@ async def test_malformed_profile_does_not_skip_others(hass, freezer, monkeypatch
 
     monkeypatch.setattr(integration, "resolve_meal", flaky_resolve)
     calls = async_mock_service(hass, "notify", "mobile_app_x")
-    freezer.move_to(at(10, 0))
+    freezer.move_to(at(10, 30))
     store = await _setup_entry(hass)
     # The malformed profile is created first so it is iterated before the valid one.
     bad_meal = meal("bad", "Rotto", "13:00", [item("Nulla", 1.0)])
@@ -170,7 +170,7 @@ async def test_malformed_profile_does_not_skip_others(hass, freezer, monkeypatch
 
 
 async def test_renaming_profile_updates_friendly_name_not_entity_id(hass, freezer):
-    freezer.move_to(at(10, 0))
+    freezer.move_to(at(10, 30))
     store, profile_id = await _setup_luca(hass)
     profile = store.profiles[profile_id]
     profile["name"] = "Marco"
@@ -206,14 +206,14 @@ async def _setup_pancake(hass, notify=None):
 
 
 async def test_sensor_items_expand_recipe_with_profile_override(hass, freezer):
-    freezer.move_to(at(10, 0))
+    freezer.move_to(at(10, 30))
     await _setup_pancake(hass)
     nxt = hass.states.get("sensor.luca_prossimo_pasto")
     assert nxt.attributes["items"] == ["Pancake: Farina 40 g, Uova 1 pz"]
 
 
 async def test_recipe_save_updates_sensor_without_time_tick(hass, freezer):
-    freezer.move_to(at(10, 0))
+    freezer.move_to(at(10, 30))
     store, recipe = await _setup_pancake(hass)
     assert hass.states.get("sensor.luca_prossimo_pasto").attributes["items"] == [
         "Pancake: Farina 40 g, Uova 1 pz"
@@ -228,7 +228,7 @@ async def test_recipe_save_updates_sensor_without_time_tick(hass, freezer):
 
 
 async def test_sensor_shows_chosen_alternative(hass, freezer):
-    freezer.move_to(at(10, 0))
+    freezer.move_to(at(10, 30))
     store = await _setup_entry(hass)
     recipe = await store.async_create_recipe("Pancake")
     recipe["ingredients"] = [
@@ -253,7 +253,7 @@ async def test_sensor_shows_chosen_alternative(hass, freezer):
 
 async def test_reminder_message_contains_recipe_text(hass, freezer):
     calls = async_mock_service(hass, "notify", "mobile_app_x")
-    freezer.move_to(at(10, 0))
+    freezer.move_to(at(10, 30))
     await _setup_pancake(hass, notify="notify.mobile_app_x")
     freezer.move_to(at(12, 45))
     async_fire_time_changed(hass, at(12, 45))

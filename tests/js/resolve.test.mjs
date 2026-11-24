@@ -13,8 +13,8 @@ const ctx = {
   CustomEvent: class { constructor(type, init) { this.type = type; Object.assign(this, init); } },
 };
 vm.createContext(ctx);
-const { expandItem, fmtItem, resolveMeal, cleanProfile, cleanRecipe, setRecipeQty, matchRecipes, cadenceRange, sumItems, SharedDietPanel } = vm.runInContext(
-  `${readFileSync(panel, "utf8")}\n;({ expandItem, fmtItem, resolveMeal, cleanProfile, cleanRecipe, setRecipeQty, matchRecipes, cadenceRange, sumItems, SharedDietPanel });`, ctx);
+const { expandItem, fmtItem, resolveMeal, cleanProfile, cleanRecipe, setRecipeQty, matchRecipes, cadenceRange, sumItems, nearestMeal, SharedDietPanel } = vm.runInContext(
+  `${readFileSync(panel, "utf8")}\n;({ expandItem, fmtItem, resolveMeal, cleanProfile, cleanRecipe, setRecipeQty, matchRecipes, cadenceRange, sumItems, nearestMeal, SharedDietPanel });`, ctx);
 // Recipe draft cleaning: trims, drops alternatives without food and ingredients left without any, keeps ids and rev, rejects negative quantities.
 {
   const cleaned = cleanRecipe({ id: "r1", name: "  Pancake ", note: " Mescolare ", rev: 3, ingredients: [
@@ -618,14 +618,15 @@ const RECIPES = {
   const p = new SharedDietPanel();
   p._recipes = R;
   p._profiles = { p1: a, p2: b };
-  const html = p._today("2026-11-12", "09:00");
+  const html = p._today("2026-11-12", "10:30"); // Colazione 07:30 is 3h ago, Pranzo 12:30 2h ahead
   const cards = html.split('<section class="card').slice(1);
   assert.equal(cards.length, 2);
   assert.match(cards[0], /Colazione[\s\S]*07:30[\s\S]*Totale[\s\S]*Latte 250 ml[\s\S]*Pancake[\s\S]*Farina 100 g[\s\S]*Anna[\s\S]*Latte 100 ml[\s\S]*Bruno[\s\S]*latte 150 ml/);
   assert.equal((cards[0].match(/Preparazione/g) ?? []).length, 1); // in the totals only
   assert.match(cards[1], /^ next"[\s\S]*Prossimo[\s\S]*12:30[\s\S]*Pasta 180 g/);
   assert.equal((cards[1].match(/<li>Sale<\/li>/g) ?? []).length, 3); // totals once + each person
-  assert.doesNotMatch(p._today("2026-11-12", "21:00"), /Prossimo/);
+  assert.match(p._today("2026-11-12", "21:00"), /class="card next"[\s\S]*Pranzo/); // 8h30 ago vs tomorrow 07:30 in 10h30
+  assert.doesNotMatch(p._today("2026-11-12", "22:00"), /Prossimo/); // tie 9h30: tomorrow's breakfast wins
   assert.doesNotMatch(html, /undefined|NaN/);
   assert.deepEqual(plain(sumItems([f("Olio", 0.1), f("olio", 0.2)])), [f("Olio", 0.3)]);
 
@@ -641,13 +642,43 @@ const RECIPES = {
   assert.doesNotMatch(merenda, /Totale/); // Carla only
   assert.match(merenda, /Preparazione/);
 
-  // Every timed meal of today already past: Oggi shows tomorrow, its first meal highlighted.
-  const d = new Date();
-  if (d.getHours() || d.getMinutes()) { // at 00:00 exactly a 00:00 meal is still ahead
-    p._profiles = { p1: mk("p1", "Anna", [{ id: "x", name: "Notte", time: "00:00", options: [[{ alts: [f("Acqua", 1, "l")] }]] }]) };
-    p._view = "today";
-    assert.match(p._body(), /<h2>Domani · [\s\S]*class="card next"[\s\S]*Prossimo/);
-  }
+  // Oggi switches to tomorrow only when tomorrow's first meal is the nearest (clock frozen through the context's Date).
+  const RealDate = vm.runInContext("Date", ctx);
+  const oggi = (hm) => {
+    ctx.Date = class extends RealDate { constructor(...a) { super(...(a.length ? a : [`2026-11-12T${hm}:00`])); } };
+    try { p._view = "today"; return p._body(); } finally { delete ctx.Date; }
+  };
+  p._profiles = { p1: mk("p1", "Anna", [
+    { id: "x", name: "Cena", time: "20:00", options: [[{ alts: [f("Pasta", 80)] }]] },
+    { id: "y", name: "Colazione", time: "07:30", options: [[{ alts: [f("Latte", 100, "ml")] }]] },
+  ]) };
+  assert.match(oggi("21:00"), /<h2>giovedì[\s\S]*class="card next"[\s\S]*Cena/); // 1h ago vs 10h30 ahead
+  assert.match(oggi("23:30"), /<h2>giovedì[\s\S]*class="card next"[\s\S]*Cena/); // 3h30 vs 8h
+  assert.match(oggi("01:46"), /<h2>giovedì[\s\S]*class="card next"[\s\S]*Colazione/); // after midnight: today's Colazione
+  // Without timed meals today Oggi stays on today, nothing highlighted.
+  p._profiles = { p1: mk("p1", "Anna", [{ id: "z", name: "Spuntino", time: null, options: [[{ alts: [f("Mela", 1, "pz")] }]] }]) };
+  p._profiles.p1.exceptions["2026-11-13"] = [{ id: "y", name: "Colazione", time: "07:30", options: [[{ alts: [f("Latte", 100, "ml")] }]] }];
+  assert.doesNotMatch(oggi("23:00"), /Domani|Prossimo/);
+  // Last meal of today early enough that the midpoint to tomorrow's first falls before midnight: past it, Oggi shows tomorrow.
+  p._profiles = { p1: mk("p1", "Anna", [{ id: "x", name: "Merenda", time: "16:00", options: [[{ alts: [f("Mela", 1, "pz")] }]] }]) };
+  p._profiles.p1.exceptions["2026-11-13"] = [{ id: "y", name: "Colazione", time: "07:00", options: [[{ alts: [f("Latte", 100, "ml")] }]] }];
+  assert.match(oggi("23:00"), /<h2>giovedì[\s\S]*class="card next"[\s\S]*Merenda/); // 7h ago vs 8h ahead
+  assert.match(oggi("23:45"), /<h2>Domani · venerdì[\s\S]*class="card next"[\s\S]*Colazione/); // 7h45 vs 7h15
+}
+
+{
+  // nearestMeal mirrors model.py nearest_meal: nearest before or after, ties to the future one, tomorrow + 24h.
+  const t = (time, tomorrow = false) => ({ time, tomorrow });
+  const day = [t("13:00"), t("16:30"), t("07:00", true)];
+  const pick = (now) => { const r = nearestMeal(day, now); return r && `${r.time}${r.tomorrow ? "+1" : ""}`; };
+  assert.equal(pick("08:00"), "13:00"); // before the first meal
+  assert.equal(pick("13:20"), "13:00"); // 20 min ago beats 3h10 ahead
+  assert.equal(pick("15:00"), "16:30"); // past the midpoint
+  assert.equal(pick("14:45"), "16:30"); // exact tie: the future one
+  assert.equal(pick("23:00"), "16:30"); // 6h30 ago vs 8h ahead
+  assert.equal(pick("23:50"), "07:00+1"); // 7h20 vs 7h10
+  assert.equal(nearestMeal([t("07:00", true)], "12:00").tomorrow, true); // no timed meal today
+  assert.equal(nearestMeal([], "12:00"), null);
 }
 
 {

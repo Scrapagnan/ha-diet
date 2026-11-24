@@ -46,7 +46,11 @@ Le ricette sono piatti composti da ingredienti, salvati una volta sola e usabili
 Per ogni profilo vengono creati due sensori, dove `<nome>` è il nome del profilo in minuscolo (es. `luca`):
 
 - `sensor.<nome>_pasto_attuale`: nome del pasto in corso (vuoto se non c'è un pasto attuale). Attributi: `time`, `items`, `option`, `profile_id`, `person`.
-- `sensor.<nome>_prossimo_pasto`: nome del prossimo pasto con orario. Stesso schema di attributi.
+- `sensor.<nome>_prossimo_pasto`: nome del pasto con orario **più vicino all'ora attuale**, prima o dopo. Stesso schema di attributi.
+
+Il prossimo pasto si sceglie tra tutti i pasti con orario di oggi e il primo pasto con orario del primo giorno successivo che ne ha (fino a 7 giorni). Vince quello con la distanza minore dall'ora attuale; a parità vince quello futuro. I pasti di ieri non contano mai: dopo mezzanotte si guarda solo il giorno corrente. Esempio: pranzo 13:00, merenda 16:30; alle 13:20 il prossimo pasto è ancora il pranzo (20 minuti contro 3 ore e 10), dalle 14:45 la merenda.
+
+Per un certo tempo dopo l'orario di un pasto, `pasto_attuale` e `prossimo_pasto` coincidono: è voluto. La scheda **Oggi** evidenzia come "Prossimo" lo stesso pasto e passa a domani solo quando il pasto più vicino è il primo di domani.
 
 I pasti senza orario non compaiono mai come attuali o prossimi e non generano promemoria.
 
@@ -54,7 +58,7 @@ Se un pasto contiene una ricetta, `items` riporta una voce per ricetta nel forma
 
 ## Esempio di automazione
 
-Quando cambia il prossimo pasto di Luca (cioè dopo ogni pasto), invia sul telefono il pasto successivo con i suoi alimenti:
+Quando cambia il prossimo pasto di Luca (cioè a metà strada tra un pasto e il successivo, oppure a mezzanotte), invia sul telefono il pasto successivo con i suoi alimenti:
 
 ```yaml
 automation:

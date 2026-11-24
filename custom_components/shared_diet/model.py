@@ -1,7 +1,7 @@
 """Pure day/meal logic for shared_diet. No homeassistant imports."""
 
 import unicodedata
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 
 
 def fold_name(s: str) -> str:
@@ -74,26 +74,46 @@ def _timed(meals: list[dict]) -> list[dict]:
     return sorted((m for m in meals if m["time"]), key=lambda m: m["time"])
 
 
+def nearest_meal(profile: dict, now: datetime, todays: list[dict] | None = None) -> tuple[dict | None, date]:
+    """Timed meal nearest to now (before or after) and its day.
+
+    Candidates: every timed meal of today plus the first timed meal of the first later day that has one
+    (up to 7 days ahead). Never yesterday's. Ties go to the future meal.
+    `todays`: today's timed meals when the caller already has them.
+    """
+    today = now.date()
+    if todays is None:
+        todays = _timed(effective_day(profile, today))
+    cands = [(today, m) for m in todays]
+    for offset in range(1, 8):
+        day = today + timedelta(days=offset)
+        timed = _timed(effective_day(profile, day))
+        if timed:
+            cands.append((day, timed[0]))
+            break
+    if not cands:
+        return None, today
+
+    def key(c: tuple[date, dict]) -> tuple[float, bool]:
+        at = datetime.combine(c[0], time.fromisoformat(c[1]["time"]), now.tzinfo)
+        delta = at.timestamp() - now.timestamp()  # real elapsed seconds, DST-safe
+        return abs(delta), delta < 0  # nearest first, then future over past
+
+    day, meal = min(cands, key=key)
+    return meal, day
+
+
 def current_and_next(
     profile: dict, now: datetime, recipes: dict | None = None
 ) -> tuple[dict | None, dict | None]:
-    """Resolved current meal (today, last one at or before now) and next meal (today, else up to 7 days ahead)."""
+    """Resolved current meal (today, last one at or before now) and next meal (the nearest one, see nearest_meal)."""
     today = now.date()
     hm = now.strftime("%H:%M")
     todays = _timed(effective_day(profile, today))
     past = [m for m in todays if m["time"] <= hm]
-    upcoming = [m for m in todays if m["time"] > hm]
-
     cur = past[-1] if past else None
     cur_day = today
-    nxt, nxt_day = (upcoming[0], today) if upcoming else (None, today)
-    if nxt is None:
-        for offset in range(1, 8):
-            day = today + timedelta(days=offset)
-            timed = _timed(effective_day(profile, day))
-            if timed:
-                nxt, nxt_day = timed[0], day
-                break
+    nxt, nxt_day = nearest_meal(profile, now, todays)
 
     cur_r = resolve_meal(cur, choice_for(profile, cur_day, cur["id"]), profile, recipes) if cur else None
     nxt_r = resolve_meal(nxt, choice_for(profile, nxt_day, nxt["id"]), profile, recipes) if nxt else None

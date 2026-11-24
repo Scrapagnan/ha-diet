@@ -136,6 +136,13 @@ const foodSel = (ctx, i, o, l, a) =>
 const zeroChoice = () => ({ option: 0, lines: {} });
 // Meals by time ("HH:MM" compares as text); meals without a time last. Stable: equal times keep their order.
 const byTime = (a, b) => { const x = a.time || "~", y = b.time || "~"; return x < y ? -1 : x > y ? 1 : 0; };
+// Mirrors model.py nearest_meal: of the candidates ({ time, tomorrow? }), the one nearest to `now` ("HH:MM" today),
+// before or after; ties go to the future one. ponytail: wall-clock minutes, a DST night can be off by an hour.
+const nearestMeal = (cands, now) => {
+  const mins = (t) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+  const score = (c) => { const d = mins(c.time) + (c.tomorrow ? 1440 : 0) - mins(now); return Math.abs(d) * 2 + (d < 0); };
+  return cands.reduce((best, c) => (!best || score(c) < score(best) ? c : best), null);
+};
 // A meal offers choices with several options or lines, or with a recipe that has an ingredient with alternatives.
 const hasChoice = (m, recipes) => m.options.length > 1 || m.options.some((o) => o.some((l) => l.alts.length > 1
   || l.alts.some((a) => "recipe" in a && recipeOf(a.recipe, recipes)?.ingredients.some((g) => g.alts.length > 1))));
@@ -1136,11 +1143,17 @@ class SharedDietPanel extends HTMLElement {
     return [...groups.values()].sort(byTime);
   }
 
-  // Meal groups of a date: summed totals, then each person's portion. The first group from `now` on is highlighted as next.
-  _today(s, now, withAlts = false) {
-    const list = this._groups(s);
+  // Next meal: of the timed groups of date `s` (list = this._groups(s)) and the first timed group of the day after
+  // (marked tomorrow), the one nearest to `now`.
+  _next(list, s, now) {
+    const first = this._groups(addDays(s, 1)).find((g) => g.time);
+    return nearestMeal([...list.filter((g) => g.time), ...(first ? [{ ...first, tomorrow: true }] : [])], now);
+  }
+
+  // Meal groups of a date: summed totals, then each person's portion. The nearest group to `now` is highlighted as next.
+  // `list` and `next` default to the groups of `s` and their nearest; pass them when already computed.
+  _today(s, now, withAlts = false, list = this._groups(s), next = this._next(list, s, now)) {
     if (!list.length) return `<p class="muted">Nessun pasto.</p>`;
-    const next = list.find((g) => g.time && g.time >= now);
     // Same food (or recipe) for two people: comparison key of a resolved item.
     const key = (i) => ("recipe" in i ? `recipe|${i.recipe}` : `${foldText(i.food)}|${i.unit ?? ""}`);
     return list.map((g) => {
@@ -1173,13 +1186,18 @@ class SharedDietPanel extends HTMLElement {
     const d = new Date();
     let day = iso(d);
     let now = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-    // Every timed meal of today is past: show tomorrow, so its first meal is the next one.
-    const timed = this._groups(day).filter((g) => g.time);
-    const tomorrow = timed.length > 0 && timed.every((g) => g.time < now);
-    if (tomorrow) [day, now] = [addDays(day, 1), "00:00"];
+    // Tomorrow's first meal is nearer than any of today's: show tomorrow; from 00:00 its first meal is the nearest.
+    // A day without timed meals stays on today.
+    const list = this._groups(day);
+    const next = this._next(list, day, now);
+    const tomorrow = list.some((g) => g.time) && next?.tomorrow === true;
+    const body = tomorrow
+      ? this._today(addDays(day, 1), "00:00", this._showAlts)
+      : this._today(day, now, this._showAlts, list, next);
+    if (tomorrow) day = addDays(day, 1);
     return `<h2>${tomorrow ? "Domani · " : ""}${esc(fmtDay(day, { weekday: "long", day: "numeric", month: "long" }))}</h2>
       <button data-act="alts">${this._showAlts ? "Nascondi alternative" : "Vedi alternative"}</button>
-      ${this._today(day, now, this._showAlts)}`;
+      ${body}`;
   }
 
   // Weekday chips (Settimana, Scelte) and the day heading.
