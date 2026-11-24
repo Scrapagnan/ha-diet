@@ -301,9 +301,10 @@ const RECIPES = {
   // Tap on the folded card opens it; a tap on its name field does not.
   q._render = () => {};
   const card = { dataset: { act: "fold", key: "r:r2" } };
-  q._onClick({ target: { closest: (sel) => (sel === "input, select, textarea" ? {} : card) } });
+  const FIELDS = "input, select, textarea, label";
+  q._onClick({ target: { closest: (sel) => (sel === FIELDS ? {} : card) } });
   assert.ok(!q._foldToggled.has("r:r2"));
-  q._onClick({ target: { closest: (sel) => (sel === "input, select, textarea" ? null : card) } });
+  q._onClick({ target: { closest: (sel) => (sel === FIELDS ? null : card) } });
   assert.ok(q._foldToggled.has("r:r2"));
   html0 = q._body();
   assert.equal(html0.match(/aria-label="Espandi ricetta"/g).length, n - 1);
@@ -720,5 +721,82 @@ const RECIPES = {
   assert.equal(p._draft.week[1][0].remind, false);
   assert.ok(!("remind" in p._draft.week[0][1])); // untimed meal untouched
   assert.match(p._body(), /role="switch" class="switch" data-ch="pfield" data-pid="p1" data-f="rem.on" checked/);
+}
+{
+  // Review fixes. A push leaves a no-draft card stale while another draft is open: its first edit starts from the copy
+  // on screen (DOM indexes match), not the new server copy.
+  const p = new SharedDietPanel();
+  p._render = () => {};
+  p.shadowRoot = { getElementById: () => null, querySelector: () => null };
+  p._profiles = {};
+  p._recipes = plain(RECIPES);
+  p._view = "recipes";
+  p._body(); // renders: records the copies on screen
+  p._onChange({ target: { value: "Frittelle", type: "text", dataset: { ch: "rfield", f: "name", rid: "r1" } } });
+  const pushed = plain(RECIPES);
+  pushed.r2.ingredients.shift(); // another user removes r2's first ingredient
+  pushed.r2.rev = 2;
+  p._onData({}, pushed); // r1 has a draft: notice only, no render
+  p._onChange({ target: { value: "Orzo", type: "text", dataset: { ch: "ring", rid: "r2", f: "food", i: "1", a: "0" } } });
+  assert.equal(p._rDrafts.r2.ingredients.length, 2);
+  assert.equal(p._rDrafts.r2.ingredients[1].alts[0].food, "Orzo");
+  assert.equal(p._rDrafts.r2.rev, RECIPES.r2.rev); // stale rev: the save is a conflict, never a misplaced edit
+
+  // A recipe on screen deleted by another user re-renders the view even while drafts are open.
+  let rendered = 0;
+  p._render = () => { rendered++; };
+  p._flash = () => {};
+  const { r2, ...rest } = pushed;
+  p._onData({}, rest);
+  assert.equal(rendered, 1);
+  assert.ok(!("r2" in p._rDrafts));
+
+  // A conflict on one recipe is still reported when a later one fails for another reason.
+  let flashed = "";
+  p._flash = (t) => { flashed = t; };
+  p.dispatchEvent = () => {};
+  p._recipes = plain(RECIPES);
+  p._rDrafts = { r1: plain(RECIPES.r1), r2: plain(RECIPES.r2) };
+  p._hass = { callWS: async (m) => { throw m.recipe.id === "r1" ? { code: "conflict" } : { code: "invalid", message: "nome doppio" }; } };
+  await p._saveRecipes();
+  assert.match(flashed, /^Cappuccino: nome doppio\. Modificate da un altro utente, dati ricaricati: Pancake$/);
+
+  // Spesa: while a preview reloads it is null (button disabled, nothing sent); a failure shows an error, not an empty list;
+  // a stale failure is dropped silently.
+  const s = new SharedDietPanel();
+  s._render = () => {};
+  s._view = "shop";
+  await s._loadShop(); // no data yet: no throw
+  s._profiles = { p1: { id: "p1", name: "Luca", week: {}, exceptions: {} } };
+  s._hass = { states: { "todo.spesa": { attributes: {} } }, callWS: async () => ({ items: ["Pasta - 400 g"] }) };
+  s._shop.preview = ["Pasta - 200 g"];
+  s._shop.skip.add("Pasta - 200 g");
+  const loading = s._loadShop();
+  assert.equal(s._shop.preview, null);
+  assert.match(s._body(), /data-act="shop" disabled/);
+  const sent = [];
+  const call = s._hass.callWS;
+  s._hass.callWS = async (m) => { sent.push(m); return call(m); };
+  await s._runShop();
+  assert.equal(sent.length, 0);
+  await loading;
+  const flashes = [];
+  s._flash = (t) => flashes.push(t);
+  let fail;
+  s._hass.callWS = () => new Promise((_, rej) => { fail = rej; });
+  const stale = s._loadShop();
+  const failStale = fail;
+  s._hass.callWS = async () => { throw { message: "Intervallo non valido" }; };
+  await s._loadShop();
+  failStale({ message: "vecchio" });
+  await stale;
+  assert.deepEqual(flashes, ["Intervallo non valido"]);
+  assert.match(s._body(), /Impossibile calcolare la spesa\./);
+  assert.doesNotMatch(s._body(), /Nessun alimento nell'intervallo/);
+
+  // Folded recipe summary skips blank foods.
+  const blank = { id: "rb", name: "Vuota", note: "", rev: 1, ingredients: [
+    { id: "i1", alts: [{ id: "a1", food: "Pasta", qty: 1, unit: "g" }] }, { id: "i2", alts: [{ id: "a2", food: " ", qty: null, unit: "g" }] }] };
+  assert.match(p._recipeCard(blank), /<p class="muted summary">Pasta<\/p>/);
 }
 console.log("resolve.test.mjs: all assertions passed");

@@ -28,6 +28,7 @@ MAX_MEALS = 12  # per day
 MAX_DATES = 400  # exception dates and per-date choices
 MAX_KEYS = 200  # other id-keyed maps (choice defaults, recipe overrides)
 MAX_EXCLUDE = 1000  # shopping rows left out of the todo list
+MAX_ROW_LEN = 1000  # characters per excluded row
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}", re.ASCII)
 
 
@@ -321,7 +322,7 @@ async def ws_delete_recipe(hass: HomeAssistant, connection: websocket_api.Active
         vol.Required("profile_ids"): vol.Any(None, [str]),
         # Without a todo entity nothing is added: the call only previews the items.
         vol.Optional("todo_entity_id"): _pattern(r"todo\.[a-z0-9_]+"),
-        vol.Optional("exclude", default=[]): _capped([str], MAX_EXCLUDE),
+        vol.Optional("exclude", default=[]): _capped([_capped(str, MAX_ROW_LEN)], MAX_EXCLUDE),
     }
 )
 @websocket_api.async_response

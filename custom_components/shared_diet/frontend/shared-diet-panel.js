@@ -335,6 +335,7 @@ class SharedDietPanel extends HTMLElement {
     this._base = null; // server copy the draft was taken from: the "original" for three-way merges
     this._dirty = false;
     this._newName = ""; // new-profile name, kept across re-renders
+    this._shown = {}; // recipe id -> server copy last rendered in Ricette
     this._rDrafts = {}; // recipe id -> draft, only for recipes with unsaved edits; saved together by the page's Salva
     // "ctx:mealId" of meals whose fold state differs from the default (default: folded). View-only.
     this._foldToggled = new Set();
@@ -482,8 +483,9 @@ class SharedDietPanel extends HTMLElement {
     if (this._profileId && !this._dirty) this._load(profiles[this._profileId]);
     this._syncRecipe();
     // A dirty editor is only annotated: re-rendering it would drop focus and the caret mid-typing.
+    // A recipe card on screen whose recipe is gone must go, so that case re-renders anyway.
     const editing = this._view === "recipes"
-      ? this._recipeDirty()
+      ? this._recipeDirty() && Object.keys(this._shown).every((id) => this._recipes[id])
       : this._dirty && ["week", "choices", "profiles"].includes(this._view);
     if (editing) {
       const el = this.shadowRoot.getElementById("notice");
@@ -555,11 +557,12 @@ class SharedDietPanel extends HTMLElement {
     return true;
   }
 
-  // Draft of a recipe, created on its first edit (null: the recipe is gone).
+  // Draft of a recipe, created on its first edit (null: the recipe is gone). It starts from the copy on screen, which a
+  // push may have left stale: the DOM indexes refer to it. A stale rev then makes the save a conflict, never a misplaced edit.
   _rDraft(rid) {
     if (!Object.hasOwn(this._rDrafts, rid)) {
       if (!this._recipes[rid]) return null;
-      this._rDrafts[rid] = clone(this._recipes[rid]);
+      this._rDrafts[rid] = clone(own(this._shown, rid) ?? this._recipes[rid]);
     }
     return this._rDrafts[rid];
   }
@@ -689,7 +692,10 @@ class SharedDietPanel extends HTMLElement {
           const res = await this._hass.callWS({ type: "shared_diet/save_recipe", recipe: cleanRecipe(draft) });
           this._recipes = { ...this._recipes, [id]: res.recipe }; // shown at once, before the push
         } catch (err) {
-          if (err?.code !== "conflict") throw new Error(`${draft.name}: ${err?.message || "salvataggio non riuscito"}`);
+          if (err?.code !== "conflict") {
+            const msg = `${draft.name}: ${err?.message || "salvataggio non riuscito"}`;
+            throw new Error(lost.length ? `${msg}. Modificate da un altro utente, dati ricaricati: ${lost.join(", ")}` : msg);
+          }
           lost.push(draft.name);
         }
         delete this._rDrafts[id];
@@ -737,19 +743,26 @@ class SharedDietPanel extends HTMLElement {
   }
 
   // Preview of the rows to buy (no todo entity: nothing is added). Stale replies are dropped.
+  // Until the reply the preview is null: "Aggiungi alla lista" stays disabled, so it never sends rows from an old preview.
   async _loadShop() {
+    if (!this._profiles) return; // _onData loads it once the data arrives
     const seq = ++this._shop.seq;
     const msg = this._shopMsg();
-    let items = [];
-    if (msg.profile_ids?.length !== 0 && Object.keys(this._profiles ?? {}).length) {
+    this._shop.preview = null;
+    this._shop.failed = false;
+    if (this._view === "shop") this._render();
+    let items = [], failed = null;
+    if (msg.profile_ids?.length !== 0 && Object.keys(this._profiles).length) {
       try {
         items = (await this._hass.callWS(msg)).items;
       } catch (err) {
-        this._flash(err?.message || "Impossibile calcolare la spesa");
+        failed = err;
       }
     }
     if (seq !== this._shop.seq) return;
+    if (failed) this._flash(failed?.message || "Impossibile calcolare la spesa");
     this._shop.preview = items;
+    this._shop.failed = !!failed;
     if (this._view === "shop") this._render();
   }
 
@@ -763,6 +776,7 @@ class SharedDietPanel extends HTMLElement {
   _runShop() {
     const todo = this._todo();
     if (!todo) return this._flash("Nessuna lista To-do disponibile");
+    if (!this._shop.preview || this._shop.failed) return;
     const exclude = (this._shop.preview ?? []).filter((t) => this._shop.skip.has(t));
     if (this._shopAll() === "false") return this._flash("Nessun alimento selezionato");
     return this._run(async () => {
@@ -796,7 +810,7 @@ class SharedDietPanel extends HTMLElement {
     }
     if (d.act === "fold") {
       // A folded card opens on a tap anywhere but its fields.
-      if (el !== e.target && e.target.closest?.("input, select, textarea")) return;
+      if (el !== e.target && e.target.closest?.("input, select, textarea, label")) return;
       if (!this._foldToggled.delete(d.key)) this._foldToggled.add(d.key);
       return this._render();
     }
@@ -1236,6 +1250,7 @@ class SharedDietPanel extends HTMLElement {
     const rows = this._shop.preview;
     const all = this._shopAll();
     const items = rows === null ? `<p class="muted">Caricamento…</p>`
+      : this._shop.failed ? `<p class="msg err">Impossibile calcolare la spesa.</p>`
       : rows.length ? `<div class="check"><button class="switch" role="checkbox" aria-checked="${all}" data-act="shopall"
           aria-label="Tutti gli alimenti"></button> Tutti gli alimenti</div>${rows.map((t, i) =>
           `<label class="check"><input type="checkbox" role="switch" class="switch" data-ch="sitem" data-i="${i}"${
@@ -1254,6 +1269,7 @@ class SharedDietPanel extends HTMLElement {
   // edited at once (a draft each); the sticky bar's Salva saves them all.
   _vRecipes() {
     const list = Object.values(this._recipes).sort((a, b) => a.name.localeCompare(b.name, "it"));
+    this._shown = Object.fromEntries(list.map((r) => [r.id, r]));
     const cards = list.map((r) => this._recipeCard(this._rDrafts[r.id] ?? r)).join("");
     return `<div class="savebar"><h2>Ricette</h2>
         <button class="primary" id="rsave" data-act="rsave"${this._recipeDirty() ? "" : " hidden"}${this._busy ? " disabled" : ""}>Salva</button>
@@ -1272,7 +1288,7 @@ class SharedDietPanel extends HTMLElement {
           aria-label="${open ? "Comprimi ricetta" : "Espandi ricetta"}">${open ? "▾" : "▸"}</button>
       </div>`;
     if (!open) {
-      const foods = r.ingredients.map((g) => g.alts.map((a) => a.food).join(" / "));
+      const foods = r.ingredients.map((g) => g.alts.map((a) => a.food.trim()).filter(Boolean).join(" / ")).filter(Boolean);
       return `<section class="card" data-act="fold" data-key="${key}">${head}
         <p class="muted summary">${foods.length ? esc(foods.join(" · ")) : "Nessun ingrediente"}</p></section>`;
     }

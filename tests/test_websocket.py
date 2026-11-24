@@ -201,6 +201,9 @@ async def test_shopping_preview_and_exclude(hass, client):
     assert resp["result"]["items"] == ["Pasta - 80 g"]
     assert [c.data["item"] for c in calls] == ["Pasta - 80 g"]
 
+    resp = await call(client, "shopping", **base, exclude=["x" * 1001])  # each excluded row is length-capped
+    assert not resp["success"]
+
 
 async def test_shopping_bad_range_rejected(client):
     base = {"profile_ids": None, "todo_entity_id": "todo.spesa", "start": MONDAY.isoformat()}
