@@ -36,6 +36,8 @@ button:disabled { opacity: 0.5; cursor: default; }
 button.primary { background: var(--primary-color, #03a9f4); color: var(--text-primary-color, #fff); border-color: transparent; }
 button.danger { color: var(--error-color, #db4437); }
 button.icon { background: none; border: 0; font-size: 22px; padding: 4px 8px; min-height: 0; color: inherit; }
+button.icon.danger { color: var(--error-color, #db4437); }
+.state { min-width: 9ch; } /* fits "Disattivo": toggling the switch must not resize the name field */
 button.add { width: 100%; border-style: dashed; margin: 8px 0; }
 button.chip { flex: 1 1 0; min-width: 0; padding: 6px 0; }
 button.chip.on { background: var(--primary-color, #03a9f4); color: var(--text-primary-color, #fff); border-color: transparent; }
@@ -610,14 +612,19 @@ class SharedDietPanel extends HTMLElement {
     return Boolean(p && user && (user.is_admin || p.user_id === user.id));
   }
 
+  // Week and choices: as _canEdit, but frozen while an admin keeps the profile disabled (server data, not the draft).
+  _canEditMeals(p) {
+    return this._canEdit(p) && !this._profiles[p.id]?.disabled;
+  }
+
   _ownId() {
     const uid = this._hass?.user?.id;
     return Object.keys(this._profiles).find((id) => uid && this._profiles[id].user_id === uid);
   }
 
   // Someone else's profile: every control inside is disabled (a native fieldset), with a note above.
-  _ro(html, ro) {
-    return ro ? `<p class="muted">Sola lettura</p><fieldset class="ro" disabled>${html}</fieldset>` : html;
+  _ro(html, ro, note = "Sola lettura") {
+    return ro ? `<p class="muted">${note}</p><fieldset class="ro" disabled>${html}</fieldset>` : html;
   }
 
   _load(profile) {
@@ -758,7 +765,9 @@ class SharedDietPanel extends HTMLElement {
         try {
           const res = await this._hass.callWS({ type: "shared_diet/save_profile", profile });
           this._load(res.profile);
-          return note;
+          // A profile disabled meanwhile keeps its meals on the server: say so instead of a plain "Salvato".
+          const dropped = res.profile.disabled && ["week", "exceptions", "choices"].some((k) => !same(profile[k], res.profile[k]));
+          return dropped ? "Profilo disabilitato: modifiche a settimana e scelte non salvate" : note;
         } catch (err) {
           if (err?.code !== "conflict") throw err;
           const theirs = this._profiles[id];
@@ -957,7 +966,7 @@ class SharedDietPanel extends HTMLElement {
 
   _shopMsg() {
     const { from, to } = cadenceRange(this._shop.cadence);
-    const ids = Object.keys(this._profiles);
+    const ids = this._activeIds();
     const selected = ids.filter((id) => !this._shop.off.has(id));
     return { type: "shared_diet/shopping", start: from, end: to, profile_ids: selected.length === ids.length ? null : selected };
   }
@@ -972,7 +981,7 @@ class SharedDietPanel extends HTMLElement {
     this._shop.preview = null;
     this._shop.failed = false;
     if (this._view === "shop") this._render();
-    const wanted = msg.profile_ids?.length !== 0 && Object.keys(this._profiles).length;
+    const wanted = msg.profile_ids?.length !== 0 && this._activeIds().length;
     let items = [], order = null, failed = null;
     try {
       // The user's category order comes along: it groups the preview and lists the categories.
@@ -1362,12 +1371,13 @@ class SharedDietPanel extends HTMLElement {
         if (btn) btn.disabled = state === "false" || this._busy;
         return;
       }
+      case "pactive": return this._run(() => this._hass.callWS({ type: "shared_diet/set_profile_disabled", profile_id: d.pid, disabled: !el.checked }),
+        el.checked ? "Profilo attivato" : "Profilo disabilitato");
       case "pfield": {
         if (!this._editCard(d.pid)) return;
         const p = this._draft;
         const v = el.type === "checkbox" ? el.checked : el.value;
         if (d.f === "name") p.name = v;
-        else if (d.f === "person") p.person = v || null;
         else if (d.f === "rem.on") {
           p.reminder.enabled = v;
           return this._edit(); // shows or hides the reminder settings
@@ -1463,7 +1473,7 @@ class SharedDietPanel extends HTMLElement {
     const sel = `<label class="row">Profilo
       <select data-ch="pick">${ids.map((id) => `<option value="${esc(id)}"${id === this._profileId ? " selected" : ""}>${esc(this._profiles[id].name)}</option>`).join("")}</select>
     </label>`;
-    if (!withSave || !this._canEdit(this._draft)) return sel;
+    if (!withSave || !this._canEditMeals(this._draft)) return sel;
     return `<div class="savebar">${sel}
       <button class="primary" id="save" data-act="save"${this._dirty ? "" : " hidden"}${this._busy ? " disabled" : ""}>Salva</button>
     </div>`;
@@ -1499,7 +1509,7 @@ class SharedDietPanel extends HTMLElement {
   // Same-name meals share a group only through mutual sharing (each includes the other's profile), transitively.
   _groups(s) {
     const byName = new Map();
-    for (const p of Object.values(this._profiles)) {
+    for (const p of Object.values(this._profiles).filter((p) => !p.disabled)) {
       for (const m of effectiveDay(p, s)) {
         const k = foldText(m.name);
         if (!byName.has(k)) byName.set(k, []);
@@ -1587,6 +1597,10 @@ class SharedDietPanel extends HTMLElement {
       ${body}`;
   }
 
+  _roNote() {
+    return this._profiles[this._draft.id]?.disabled ? "Profilo disabilitato: sola lettura" : "Sola lettura";
+  }
+
   // Weekday chips (Settimana, Scelte) and the day heading.
   _dayChips() {
     const chips = DAYS_SHORT.map((d, i) => `<button class="chip${i === this._wday ? " on" : ""}" data-act="wday" data-d="${i}">${d}</button>`).join("");
@@ -1596,7 +1610,7 @@ class SharedDietPanel extends HTMLElement {
   _vWeek() {
     if (!this._draft) return this._picker();
     return `${this._picker(true)}${this._dayChips()}
-      ${this._ro(this._mealEditor(`w${this._wday}`, this._draft.week[String(this._wday)]), !this._canEdit(this._draft))}`;
+      ${this._ro(this._mealEditor(`w${this._wday}`, this._draft.week[String(this._wday)]), !this._canEditMeals(this._draft), this._roNote())}`;
   }
 
   // Choices of the weekly schema's meals for the selected weekday (choices.defaults, by meal id).
@@ -1608,7 +1622,7 @@ class SharedDietPanel extends HTMLElement {
       ${this._choiceEditor("", m, own(this._draft.choices.defaults, m.id) ?? zeroChoice())}
     </section>`).join("");
     return `${this._picker(true)}${this._dayChips()}
-      ${cards ? this._ro(cards, !this._canEdit(this._draft)) : `<p class="muted">Nessun pasto con alternative.</p>`}`;
+      ${cards ? this._ro(cards, !this._canEditMeals(this._draft), this._roNote()) : `<p class="muted">Nessun pasto con alternative.</p>`}`;
   }
 
   _choiceEditor(date, m, choice) {
@@ -1643,8 +1657,13 @@ class SharedDietPanel extends HTMLElement {
     return optSel + lines + recipeSels;
   }
 
+  // Profiles an admin has not disabled: the only ones offered for shopping.
+  _activeIds() {
+    return Object.keys(this._profiles).filter((id) => !this._profiles[id].disabled);
+  }
+
   _vShop() {
-    const ids = Object.keys(this._profiles);
+    const ids = this._activeIds();
     const profiles = ids.map((id) => `<label class="check"><input type="checkbox" role="switch" class="switch" data-ch="sprof" data-id="${esc(id)}"${
       this._shop.off.has(id) ? "" : " checked"}> ${esc(this._profiles[id].name)}</label>`).join("") || `<p class="muted">Nessun profilo.</p>`;
     const rows = this._shop.preview;
@@ -1792,7 +1811,6 @@ class SharedDietPanel extends HTMLElement {
 
   _vProfiles() {
     const head = `<h2>Profili</h2>`;
-    const persons = Object.keys(this._hass.states).filter((e) => e.startsWith("person.")).sort();
     const notifies = Object.entries(this._hass.services.notify ?? {})
       .filter(([n, svc]) => n !== "send_message" && !svc.fields?.entity_id)
       .map(([n]) => `notify.${n}`).sort();
@@ -1820,14 +1838,20 @@ class SharedDietPanel extends HTMLElement {
     const card = (id) => {
       const p = id === this._profileId && this._draft ? this._draft : this._profiles[id];
       const pid = `data-pid="${esc(id)}"`;
-      const select = (field, current, list, empty, label = (v) => v) => {
+      const select = (field, current, list, empty) => {
         const all = current && !list.includes(current) ? [current, ...list] : list;
         return `<select data-ch="pfield" ${pid} data-f="${field}"><option value="">${empty}</option>${all.map((v) =>
-          `<option value="${esc(v)}"${v === current ? " selected" : ""}>${esc(label(v))}</option>`).join("")}</select>`;
+          `<option value="${esc(v)}"${v === current ? " selected" : ""}>${esc(v)}</option>`).join("")}</select>`;
       };
       const dirty = id === this._profileId && this._dirty;
-      const fields = `<label class="sub-row">Nome <input value="${esc(p.name)}" data-ch="pfield" ${pid} data-f="name"></label>
-        <label class="sub-row">Persona collegata ${select("person", p.person, persons, "Nessuna", (v) => this._hass.states[v]?.attributes.friendly_name ?? v)}</label>
+      // Admins: on the name row, the active switch (disabled = week and choices frozen, no reminders, hidden from
+      // Oggi and Spesa) and, at the far right, delete.
+      const off = this._profiles[id].disabled;
+      const admin = this._hass.user?.is_admin
+        ? `<label class="check"><input type="checkbox" role="switch" class="switch" data-ch="pactive" ${pid}${off ? "" : " checked"}> <span class="state">${off ? "Disattivo" : "Attivo"}</span></label>
+          <button class="icon danger" data-act="delprofile" ${pid} aria-label="Elimina profilo" title="Elimina profilo">${TRASH}</button>`
+        : "";
+      const fields = `<div class="sub-row"><label class="check grow">Nome <input class="grow" value="${esc(p.name)}" data-ch="pfield" ${pid} data-f="name"></label>${admin}</div>
         <label class="check"><input type="checkbox" role="switch" class="switch" data-ch="pfield" ${pid} data-f="rem.on"${p.reminder.enabled ? " checked" : ""}> Promemoria</label>
         ${p.reminder.enabled ? `<label class="sub-row">Minuti prima del pasto
           <input type="number" min="0" max="240" step="1" value="${esc(p.reminder.minutes)}" data-ch="pfield" ${pid} data-f="rem.min"></label>
@@ -1836,10 +1860,10 @@ class SharedDietPanel extends HTMLElement {
       const editable = this._canEdit(this._profiles[id]);
       // Profiles are created per HA user; only an admin may delete one. While its user exists it comes back empty
       // at the next restart or user addition.
-      const buttons = (editable ? `<button class="primary" data-act="save" ${pid}${dirty ? "" : " hidden"}${this._busy ? " disabled" : ""}>Salva</button>` : "")
-        + (this._hass.user?.is_admin ? `<button class="danger" data-act="delprofile" ${pid}>Elimina profilo</button>` : "");
+      const buttons = editable ? `<button class="primary" data-act="save" ${pid}${dirty ? "" : " hidden"}${this._busy ? " disabled" : ""}>Salva</button>` : "";
       return `<section class="card">
         ${p.user_id ? "" : `<p class="muted">Nessun utente collegato</p>`}
+        ${off && !this._hass.user?.is_admin ? `<p class="muted">Profilo disabilitato</p>` : ""}
         ${this._ro(fields, !editable)}
         ${buttons ? `<div class="row">${buttons}</div>` : ""}
       </section>`;
@@ -1856,7 +1880,7 @@ class SharedDietPanel extends HTMLElement {
   _mealCard(ctx, m, i) {
     const at = `data-ctx="${esc(ctx)}" data-i="${i}"`;
     const key = `${ctx}:${m.id}`;
-    const ro = !this._canEdit(this._draft); // read-only meals stay open: their fold button would be disabled
+    const ro = !this._canEditMeals(this._draft); // read-only meals stay open: their fold button would be disabled
     const folded = !ro && !this._foldToggled.has(key);
     const head = `<div class="row">
         <input class="grow" value="${esc(m.name)}" data-ch="meal" data-f="name" ${at} placeholder="Pasto" aria-label="Nome pasto">
