@@ -94,19 +94,21 @@ details p { white-space: pre-line; margin: 6px 0; }
 .catrow.dragging { opacity: 0.6; box-shadow: 0 3px 10px rgba(0, 0, 0, .35); }
 .grip { cursor: grab; touch-action: none; user-select: none; font-size: 20px; }
 .grip:active { cursor: grabbing; }
-/* Spesa: one card per food, name on top, quantity and category below (min-width column: categories line up with or
-   without a quantity; a long unit widens it). Ticked: accent border; unticked (.off): faded. The checkbox stays
+/* Spesa: one card per food, 2x2 grid: name on the left across both rows, quantity top-right, category bottom-right
+   (min-width column: cards line up with or without a quantity; a long unit widens it). Ticked: accent border; unticked (.off): faded. The checkbox stays
    focusable but out of sight. */
 .scards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr)); gap: 8px; }
-.scard { display: grid; grid-template-columns: minmax(128px, max-content) minmax(0, 1fr); grid-template-areas: "name name" "qty cat";
-  position: relative; align-items: center; gap: 6px 8px; padding: 10px 12px; cursor: pointer; border-radius: 12px;
+.scard { display: grid; grid-template-columns: minmax(0, 1fr) minmax(128px, max-content);
+  /* 1fr spacer rows soak up a tall name, keeping quantity and category together and centred. */
+  grid-template-rows: 1fr auto auto 1fr; grid-template-areas: "name ." "name qty" "name cat" "name .";
+  position: relative; align-items: center; gap: 0 8px; padding: 10px 12px; cursor: pointer; border-radius: 12px;
   border: 2px solid var(--divider-color, #e0e0e0); background: var(--card-background-color, #fff); transition: opacity 0.15s; }
 .scard:not(.off) { border-color: var(--primary-color, #03a9f4); }
 .scard.off { opacity: 0.5; }
 .scard:has(.spick:focus-visible) { outline: 2px solid var(--primary-color, #03a9f4); outline-offset: 2px; }
 .spick { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
-.sname { grid-area: name; font-weight: 500; overflow-wrap: anywhere; }
-.scard .sqty { grid-area: qty; }
+.sname { grid-area: name; font-weight: 500; overflow-wrap: break-word; }
+.scard .sqty { grid-area: qty; margin-bottom: 6px; }
 .scard select { grid-area: cat; width: 100%; }
 .sqty { display: flex; align-items: center; gap: 4px; }
 .sqty input { width: 80px; }
