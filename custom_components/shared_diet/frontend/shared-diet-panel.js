@@ -94,14 +94,15 @@ details p { white-space: pre-line; margin: 6px 0; }
 .catrow.dragging { opacity: 0.6; box-shadow: 0 3px 10px rgba(0, 0, 0, .35); }
 .grip { cursor: grab; touch-action: none; user-select: none; font-size: 20px; }
 .grip:active { cursor: grabbing; }
-/* Spesa: one card per food, name on top, quantity and category below (fixed column: categories line up with or
-   without a quantity). Ticked: accent border; unticked: faded. The checkbox stays focusable but out of sight. */
-.scards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; }
-.scard { display: grid; grid-template-columns: 128px minmax(0, 1fr); grid-template-areas: "name name" "qty cat";
+/* Spesa: one card per food, name on top, quantity and category below (min-width column: categories line up with or
+   without a quantity; a long unit widens it). Ticked: accent border; unticked (.off): faded. The checkbox stays
+   focusable but out of sight. */
+.scards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr)); gap: 8px; }
+.scard { display: grid; grid-template-columns: minmax(128px, max-content) minmax(0, 1fr); grid-template-areas: "name name" "qty cat";
   position: relative; align-items: center; gap: 6px 8px; padding: 10px 12px; cursor: pointer; border-radius: 12px;
   border: 2px solid var(--divider-color, #e0e0e0); background: var(--card-background-color, #fff); transition: opacity 0.15s; }
-.scard:has(.spick:checked) { border-color: var(--primary-color, #03a9f4); }
-.scard:not(:has(.spick:checked)) { opacity: 0.5; }
+.scard:not(.off) { border-color: var(--primary-color, #03a9f4); }
+.scard.off { opacity: 0.5; }
 .scard:has(.spick:focus-visible) { outline: 2px solid var(--primary-color, #03a9f4); outline-offset: 2px; }
 .spick { position: absolute; opacity: 0; width: 1px; height: 1px; pointer-events: none; }
 .sname { grid-area: name; font-weight: 500; overflow-wrap: anywhere; }
@@ -138,7 +139,7 @@ details p { white-space: pre-line; margin: 6px 0; }
 ul { padding-left: 20px; margin: 6px 0; }
 ul.alts { list-style: none; padding-left: 0; font-size: 14px; }
 /* min-width 0: a fieldset defaults to min-content and would overflow a phone screen instead of shrinking. */
-fieldset { border: 1px solid var(--divider-color, #e0e0e0); border-radius: 8px; min-width: 0; margin: 8px 0; }
+fieldset { border: 1px solid var(--divider-color, #e0e0e0); border-radius: 8px; min-width: 0; }
 fieldset.ro { border: 0; padding: 0; margin: 0; min-width: 0; }
 ${LIST_CSS}`;
 
@@ -147,7 +148,7 @@ const uid = () =>
   (crypto.randomUUID ? crypto.randomUUID() : [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("")).replaceAll("-", "");
 
 // Text fields a push must not re-render under the user's typing (see _onData and focusout).
-const TYPING = '[data-ch="catname"], #newcat, #newitem, #newqty, #newunit';
+const TYPING = '[data-ch="catname"], #newcat, #newitem, #newqty';
 
 // Edited quantities to send with "Aggiungi alla lista": {row text: qty} for selected rows with a quantity whose field
 // was changed. An empty field keeps the computed quantity; anything else must be a number > 0.
@@ -1024,6 +1025,10 @@ class SharedDietPanel extends HTMLElement {
     switch (d.act) {
       case "menu":
         return this.dispatchEvent(new Event("hass-toggle-menu", { bubbles: true, composed: true }));
+      // A Spesa card: a tap anywhere but its fields ticks its checkbox (the click fires the checkbox's own change).
+      case "scard":
+        if (e.target.closest?.("input, select")) return;
+        return el.querySelector(".spick")?.click();
       case "sugg": return this._pickSugg(d.v);
       case "sugg-recipe": return this._pickRecipe(d.rid);
       case "rreset":
@@ -1221,6 +1226,7 @@ class SharedDietPanel extends HTMLElement {
         this.shadowRoot.querySelector('[data-act="shopall"]')?.setAttribute("aria-checked", state);
         const btn = this.shadowRoot.querySelector('[data-act="shop"]');
         if (btn) btn.disabled = state === "false" || this._busy;
+        el.closest(".scard")?.classList.toggle("off", !el.checked);
         return;
       }
       case "pactive": return this._run(() => this._hass.callWS({ type: "shared_diet/set_profile_disabled", profile_id: d.pid, disabled: !el.checked }),
@@ -1442,14 +1448,15 @@ class SharedDietPanel extends HTMLElement {
     const groups = order.map((cid) => {
       // A row from a stale preview may name a category deleted since: it shows under "altro" rather than vanish.
       const group = (rows ?? []).map((r, i) => [r, i]).filter(([r]) => (order.includes(r.category) ? r.category : "altro") === cid);
-      // One card per food, a <label> around its checkbox: a tap on the card (not on its fields) ticks it, natively.
+      // One card per food: a tap on the card (not on its fields) ticks its checkbox (data-act="scard"); "off" = unticked.
       return group.length ? `<h3>${esc(names[cid])}</h3><div class="scards">${group.map(([r, i]) => {
         const name = r.qty === null ? r.text : r.food;
-        return `<label class="scard"><input type="checkbox" class="spick" data-ch="sitem" data-i="${i}"${
-          this._shop.skip.has(r.text) ? "" : " checked"} aria-label="${esc(name)}"><span class="sname">${esc(name)}</span>
+        const off = this._shop.skip.has(r.text);
+        return `<div class="scard${off ? " off" : ""}" data-act="scard"><input type="checkbox" class="spick" data-ch="sitem" data-i="${i}"${
+          off ? "" : " checked"} aria-label="${esc(name)}"><span class="sname">${esc(name)}</span>
           ${r.qty === null ? "" : `<span class="sqty"><input type="number" min="0" max="${MAX_SHOP_QTY}" step="any" inputmode="decimal" data-ch="sqty" data-i="${i}"
             value="${esc(this._shop.qty.get(r.text) ?? r.qty)}" aria-label="Quantità di ${esc(r.food)}"><span class="unit">${esc(r.unit)}</span></span>`}
-          <select data-ch="scat" data-i="${i}" aria-label="Categoria di ${esc(r.food)}">${catOpts(this._manualCat(r))}</select></label>`;
+          <select data-ch="scat" data-i="${i}" aria-label="Categoria di ${esc(r.food)}">${catOpts(this._manualCat(r))}</select></div>`;
       }).join("")}</div>` : "";
     }).join("");
     const items = rows === null ? `<p class="muted">Caricamento…</p>`
