@@ -77,8 +77,8 @@ def test_shopping_rows_carry_food_and_category():
     p = {"week": week, "exceptions": {}, "choices": {"defaults": {}, "dates": {}}}
     rows = shopping_items([p], MONDAY, MONDAY, {}, CATS, {"sale": "snack_dolci"})
     assert rows == [
-        {"text": "Pollo - 100 g", "food": "Pollo", "category": "carne_pesce", "manual": False},
-        {"text": "Sale (q.b.)", "food": "Sale", "category": "snack_dolci", "manual": True},
+        {"text": "Pollo - 100 g", "food": "Pollo", "qty": 100.0, "unit": "g", "category": "carne_pesce", "manual": False},
+        {"text": "Sale (q.b.)", "food": "Sale", "qty": None, "unit": "", "category": "snack_dolci", "manual": True},
     ]
 
 
@@ -177,7 +177,7 @@ async def test_two_users_see_their_own_order(hass, hass_ws_client, setup_entry):
     # Override is the house's: Bea moves Mele and Anna sees it too.
     assert (await call(bea, "set_food_category", food="mele", category_id="altro"))["success"]
     rows = (await call(anna, "shopping", **base))["result"]["items"]
-    assert rows[-1] == {"text": "Mele - 2 pz", "food": "Mele", "category": "altro", "manual": True}
+    assert rows[-1] == {"text": "Mele - 2 pz", "food": "Mele", "qty": 2.0, "unit": "pz", "category": "altro", "manual": True}
 
     # A new category goes last for everyone.
     new = (await call(bea, "create_category", name=" Carni bianche "))["result"]["category"]

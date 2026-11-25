@@ -16,7 +16,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import config_validation as cv
 
 from .const import DOMAIN
-from .model import category_for, fold_name, food_of, shopping_items
+from .model import category_for, fold_name, food_of, shopping_items, shopping_text
 from .todo import UNIQUE_ID as SHOPPING_UNIQUE_ID
 from .store import (
     MAX_CATEGORIES,
@@ -328,6 +328,10 @@ async def ws_delete_recipe(hass: HomeAssistant, connection: websocket_api.Active
         # True: the rows are added to the family shopping list (todo entity); otherwise only previewed.
         vol.Optional("add", default=False): bool,
         vol.Optional("exclude", default=[]): _capped([_capped(str, MAX_ROW_LEN)], MAX_EXCLUDE),
+        # Quantities edited in the panel, by row text: the row is added with this quantity instead (rows with one only).
+        vol.Optional("qty", default=dict): _capped(
+            {_capped(str, MAX_ROW_LEN): vol.All(_nonnull_qty, vol.Range(min=0, min_included=False))}, MAX_EXCLUDE
+        ),
     }
 )
 @websocket_api.async_response
@@ -361,6 +365,11 @@ async def ws_shopping(hass: HomeAssistant, connection: websocket_api.ActiveConne
             return
         excluded = set(msg["exclude"])
         items = [row for row in items if row["text"] not in excluded]
+        edited = msg["qty"]
+        for row in items:
+            if row["qty"] is not None and row["text"] in edited:
+                row["qty"] = edited[row["text"]]
+                row["text"] = shopping_text(row["food"], row["qty"], row["unit"])
         await store.async_add_shopping([row["text"] for row in items])
     connection.send_result(msg["id"], {"items": items})
 

@@ -164,8 +164,9 @@ def shopping_items(
     categories: list[dict] | None = None,
     overrides: dict[str, str] | None = None,
 ) -> list[dict]:
-    """Aggregated shopping rows {text, food, category, manual} over [start, end] (inclusive), sorted by normalized food
-    name then unit. `manual`: the category is the food's override, not a guess from its name."""
+    """Aggregated shopping rows {text, food, qty, unit, category, manual} over [start, end] (inclusive), sorted by
+    normalized food name then unit. `qty` is None (unit "") for rows without a quantity ("Sale (q.b.)").
+    `manual`: the category is the food's override, not a guess from its name."""
     totals: dict[tuple[str, str], tuple[str, float]] = {}  # (food, unit) -> (first spelling, sum)
     untimed: dict[str, tuple[str, str]] = {}  # food -> (first spelling, note)
     day = start
@@ -184,9 +185,9 @@ def shopping_items(
                             totals[key] = (name, qty + item["qty"])
         day += timedelta(days=1)
     numeric_foods = {norm for norm, _ in totals}
-    rows = [(norm, unit, name, f"{name} - {qty:g} {unit}") for (norm, unit), (name, qty) in totals.items()]
+    rows = [(norm, unit, name, shopping_text(name, qty, unit), qty) for (norm, unit), (name, qty) in totals.items()]
     rows += [
-        (norm, "", name, f"{name} ({note})" if note else name)
+        (norm, "", name, f"{name} ({note})" if note else name, None)
         for norm, (name, note) in untimed.items()
         if norm not in numeric_foods
     ]
@@ -197,11 +198,18 @@ def shopping_items(
         {
             "text": text,
             "food": name,
+            "qty": qty,
+            "unit": unit,
             "category": category_for(name, categories, overrides),
             "manual": overrides.get(fold_name(name)) in ids,
         }
-        for _, _, name, text in sorted(rows)
+        for _, unit, name, text, qty in sorted(rows, key=lambda r: r[:4])
     ]
+
+
+def shopping_text(food: str, qty: float, unit: str) -> str:
+    """Text of a shopping row with a quantity: "Pollo - 300 g"."""
+    return f"{food} - {qty:g} {unit}"
 
 
 def format_item(item: dict) -> str:

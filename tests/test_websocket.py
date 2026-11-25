@@ -230,7 +230,7 @@ async def test_shopping_adds_to_todo(hass, client):
         profile_ids=None,
         add=True,
     )
-    assert resp["result"]["items"] == [{"text": "Pasta - 80 g", "food": "Pasta", "category": "pasta_cereali", "manual": False}]
+    assert resp["result"]["items"] == [{"text": "Pasta - 80 g", "food": "Pasta", "qty": 80.0, "unit": "g", "category": "pasta_cereali", "manual": False}]
     await hass.async_block_till_done()
     state = hass.states.get("todo.lista_della_spesa")
     assert state.state == "1"  # items to buy
@@ -253,6 +253,27 @@ async def test_shopping_preview_and_exclude(hass, client):
 
     resp = await call(client, "shopping", **base, exclude=["x" * 1001])  # each excluded row is length-capped
     assert not resp["success"]
+
+
+async def test_shopping_edited_qty(hass, client):
+    profile = own_profile(client)
+    profile["week"]["0"] = [meal("pasta", "12:00", [[{"alts": [item("Pasta", 80.0)]}, {"alts": [item("Sale", None, "", "q.b.")]}]])]
+    assert (await call(client, "save_profile", profile=profile))["success"]
+    base = {"start": MONDAY.isoformat(), "end": MONDAY.isoformat(), "profile_ids": None}
+
+    for bad in (0, -5, "100", None, True):  # a quantity must be a number > 0
+        resp = await call(client, "shopping", **base, add=True, qty={"Pasta - 80 g": bad})
+        assert not resp["success"], bad
+    assert client.store.shopping == []
+
+    # Rows without a quantity and unknown rows ignore edits; the edited row is added with its new quantity.
+    resp = await call(client, "shopping", **base, add=True, qty={"Pasta - 80 g": 250.5, "Sale (q.b.)": 3, "Riso - 1 g": 9})
+    assert resp["success"]
+    assert sorted(i["summary"] for i in client.store.shopping) == ["Pasta - 250.5 g", "Sale (q.b.)"]
+
+    # Preview ignores edits.
+    resp = await call(client, "shopping", **base, qty={"Pasta - 80 g": 1})
+    assert "Pasta - 80 g" in [r["text"] for r in resp["result"]["items"]]
 
 
 async def test_shopping_bad_range_rejected(client):
