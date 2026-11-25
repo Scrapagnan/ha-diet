@@ -94,11 +94,12 @@ details p { white-space: pre-line; margin: 6px 0; }
 .catrow.dragging { opacity: 0.6; box-shadow: 0 3px 10px rgba(0, 0, 0, .35); }
 .grip { cursor: grab; touch-action: none; user-select: none; font-size: 20px; }
 .grip:active { cursor: grabbing; }
-/* Spesa: one card per food, 2x2 grid: name on the left across both rows, quantity top-right, category bottom-right
-   (min-width column: cards line up with or without a quantity; a long unit widens it). Ticked: accent border; unticked (.off): faded. The checkbox stays
+/* Spesa: one card per food, 2x2 grid: name on the left across both rows, quantity top-right, category bottom-right.
+   The right column is a fixed share (not content-sized), so a long category name can't squeeze the name away and
+   cards line up with or without a quantity. Ticked: accent border; unticked (.off): faded. The checkbox stays
    focusable but out of sight. */
 .scards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr)); gap: 8px; }
-.scard { display: grid; grid-template-columns: minmax(0, 1fr) minmax(128px, max-content);
+.scard { display: grid; grid-template-columns: minmax(0, 1fr) minmax(128px, 55%);
   /* 1fr spacer rows soak up a tall name, keeping quantity and category together and centred. */
   grid-template-rows: 1fr auto auto 1fr; grid-template-areas: "name ." "name qty" "name cat" "name .";
   position: relative; align-items: center; gap: 0 8px; padding: 10px 12px; cursor: pointer; border-radius: 12px;
