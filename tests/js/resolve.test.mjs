@@ -830,4 +830,67 @@ const RECIPES = {
     { id: "i1", alts: [{ id: "a1", food: "Pasta", qty: 1, unit: "g" }] }, { id: "i2", alts: [{ id: "a2", food: " ", qty: null, unit: "g" }] }] };
   assert.match(p._recipeCard(blank), /<p class="muted summary">Pasta<\/p>/);
 }
+{
+  // Per-meal sharing (issue #4): same-name meals group only through mutual sharing, transitively; absent = everyone.
+  const f = (food, qty) => ({ food, qty, unit: "g", note: "" });
+  const mk = (id, name, shared) => {
+    const m = { id: `m${id}`, name: "Pranzo", time: "13:00", options: [[{ alts: [f("Pasta", 80)] }]], ...(shared === undefined ? {} : { shared_with: shared }) };
+    const week = {}; for (let d = 0; d < 7; d++) week[d] = [m];
+    return { id, name, person: null, reminder: { enabled: false, minutes: 15, notify: null }, week, exceptions: {},
+      choices: { defaults: {}, dates: {} }, rev: 1, recipe_qty: {} };
+  };
+  const p = new SharedDietPanel();
+  p._recipes = {};
+  const groups = (...profs) => {
+    p._profiles = Object.fromEntries(profs.map((x) => [x.id, x]));
+    return plain(p._groups("2026-11-12").map((g) => g.rows.map((r) => r.p.name).join("+")));
+  };
+  const cards = () => p._today("2026-11-12", "13:00").split('<section class="card').slice(1);
+  assert.deepEqual(groups(mk("a", "Anna"), mk("b", "Bruno"), mk("c", "Carla")), ["Anna+Bruno+Carla"]); // no field: as before
+  assert.deepEqual(groups(mk("a", "Anna", []), mk("b", "Bruno"), mk("c", "Carla")), ["Anna", "Bruno+Carla"]);
+  assert.match(cards()[0], /Anna/);
+  assert.doesNotMatch(cards()[0], /Totale/); // [] alone: no totals
+  assert.match(cards()[1], /Totale[\s\S]*Pasta 160 g/);
+  // Partial: A+B mutual, C excluded by both.
+  assert.deepEqual(groups(mk("a", "Anna", ["b"]), mk("b", "Bruno", ["a"]), mk("c", "Carla")), ["Anna+Bruno", "Carla"]);
+  // Not mutual: A includes B, B excludes A.
+  assert.deepEqual(groups(mk("a", "Anna", ["b"]), mk("b", "Bruno", [])), ["Anna", "Bruno"]);
+  // Transitive: A-B and B-C linked, A-C not.
+  assert.deepEqual(groups(mk("a", "Anna", ["b"]), mk("b", "Bruno"), mk("c", "Carla", ["b"])), ["Anna+Bruno+Carla"]);
+  // Unknown ids are ignored.
+  assert.deepEqual(groups(mk("a", "Anna", ["gone"]), mk("b", "Bruno")), ["Anna", "Bruno"]);
+  // Same name and time: separate cards ordered by profile name.
+  assert.deepEqual(groups(mk("z", "Zoe", []), mk("a", "Anna", [])), ["Anna", "Zoe"]);
+  // cleanProfile keeps a list, drops null/absent.
+  const draft = mk("a", "Anna", ["b"]);
+  draft.week[1] = [{ ...draft.week[1][0], shared_with: null }];
+  const c = plain(cleanProfile(draft));
+  assert.deepEqual(c.week[0][0].shared_with, ["b"]);
+  assert.equal("shared_with" in c.week[1][0], false);
+  // Editor: "Tutti" ticked hides the per-profile boxes; unticked shows one per other profile.
+  p._profiles = { a: mk("a", "Anna"), b: mk("b", "Bruno"), c: mk("c", "Carla") };
+  p._draft = p._profiles.a;
+  p._foldToggled = new Set(["w0:ma"]);
+  const card = (m) => p._mealCard("w0", m, 0);
+  assert.match(card({ ...p._draft.week[0][0] }), /Condiviso con[\s\S]*data-pid="" checked> Tutti/);
+  assert.doesNotMatch(card({ ...p._draft.week[0][0] }), /data-pid="b"/);
+  const partial = card({ ...p._draft.week[0][0], shared_with: ["c"] });
+  assert.match(partial, /data-pid=""> Tutti[\s\S]*data-pid="b"> Bruno[\s\S]*data-pid="c" checked> Carla/);
+  assert.doesNotMatch(partial, /data-pid="a"/); // not oneself
+  // Alone: no row for "Tutti", but a meal still unshared keeps it so it can be reset.
+  p._profiles = { a: p._profiles.a };
+  assert.doesNotMatch(card({ ...p._draft.week[0][0] }), /Condiviso con/);
+  assert.match(card({ ...p._draft.week[0][0], shared_with: [] }), /Condiviso con[\s\S]*data-pid=""> Tutti/);
+  // Change handler: Tutti off -> [], tick/untick a profile, Tutti on -> field removed.
+  p._profiles = { a: mk("a", "Anna"), b: mk("b", "Bruno"), c: mk("c", "Carla") };
+  p._draft = JSON.parse(JSON.stringify(p._profiles.a));
+  p._busy = false;
+  p._render = () => {};
+  const toggle = (pid, checked) => p._onChange({ target: { checked, dataset: { ch: "share", ctx: "w0", i: "0", pid } } });
+  const sw = () => plain(p._draft.week[0][0].shared_with);
+  toggle("", false); assert.deepEqual(sw(), []);
+  toggle("b", true); toggle("c", true); toggle("b", true); assert.deepEqual(sw(), ["c", "b"]);
+  toggle("c", false); assert.deepEqual(sw(), ["b"]);
+  toggle("", true); assert.equal("shared_with" in p._draft.week[0][0], false);
+}
 console.log("resolve.test.mjs: all assertions passed");

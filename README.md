@@ -16,7 +16,7 @@ L'integrazione non richiede Supervisor e salva i dati solo in Home Assistant (`.
 Dopo l'installazione compare **Dieta** nella barra laterale. Le schede sono:
 
 - **Oggi**: pasti di oggi del profilo selezionato, con le scelte applicate. "Vedi alternative" mostra tutte le opzioni.
-- **Settimana**: pasti di ogni giorno della settimana. Aggiungi, rimuovi o riordina i pasti; ogni pasto ha opzioni (A, B, …) fatte di righe, e ogni riga può avere alternative ("OPPURE"). Il campo alimento suggerisce i nomi già usati in tutti i profili.
+- **Settimana**: pasti di ogni giorno della settimana. Aggiungi, rimuovi o riordina i pasti; ogni pasto ha opzioni (A, B, …) fatte di righe, e ogni riga può avere alternative ("OPPURE"). Il campo alimento suggerisce i nomi già usati in tutti i profili. "Condiviso con" indica con chi si mangia quel pasto: "Tutti" (predefinito) oppure i profili spuntati. In **Oggi** i pasti con lo stesso nome finiscono nella stessa scheda, con il Totale, solo se la condivisione è reciproca (A spunta B e B spunta A, anche tramite un terzo); gli altri hanno una scheda propria. Eliminando un profilo, viene tolto da tutte le condivisioni.
 - **Date**: crea un'eccezione per una data specifica (copia il giorno della settimana, mantenendo le scelte), modificala o eliminala.
 - **Scelte**: per un intervallo di date, scegli l'opzione e l'alternativa di ogni pasto. Il predefinito vale per tutte le date; "Ritocca per questa data" cambia solo quel giorno. Le ricette del percorso scelto mostrano anche le tendine delle loro alternative ingrediente (vedi sotto).
 - **Ricette**: il ricettario condiviso, da cui si aggiungono ricette ai pasti (vedi sotto).

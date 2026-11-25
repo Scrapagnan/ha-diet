@@ -136,6 +136,12 @@ class DietStore:
     async def async_delete_profile(self, profile_id: str) -> None:
         if self._profiles.pop(profile_id, None) is None:
             return
+        # No rev bump: open drafts of other profiles must not conflict over it. A draft may save the id back; readers ignore it.
+        for profile in self._profiles.values():
+            for meals in [*profile["week"].values(), *profile["exceptions"].values()]:
+                for meal in meals:
+                    if profile_id in (meal.get("shared_with") or []):
+                        meal["shared_with"] = [pid for pid in meal["shared_with"] if pid != profile_id]
         await self._async_commit()
 
     async def async_create_recipe(self, name: str) -> dict:

@@ -66,6 +66,23 @@ async def test_delete_unknown_is_noop_without_notify(hass):
     assert calls == [1, 1]
 
 
+async def test_delete_profile_removes_it_from_shared_with(hass):
+    s = DietStore(hass)
+    await s.async_load()
+    gone = await s.async_create_profile("Gone")
+    kept = await s.async_create_profile("Kept")
+    other = await s.async_create_profile("Other")
+    meal = lambda mid, shared: {"id": mid, "name": "Pranzo", "time": None, "options": [], "shared_with": shared}
+    kept["week"]["0"] = [meal("a", [gone["id"], other["id"]]), meal("b", None), meal("c", [])]
+    kept["exceptions"]["2026-11-18"] = [meal("d", [gone["id"]])]
+    kept = await s.async_save_profile(kept)
+    await s.async_delete_profile(gone["id"])
+    after = s.profiles[kept["id"]]
+    assert [m["shared_with"] for m in after["week"]["0"]] == [[other["id"]], None, []]
+    assert after["exceptions"]["2026-11-18"][0]["shared_with"] == []
+    assert after["rev"] == kept["rev"]  # no rev bump: open drafts keep saving without a conflict
+
+
 async def test_raising_listener_does_not_block_others_or_fail_save(hass):
     s = DietStore(hass)
     await s.async_load()

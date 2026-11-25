@@ -135,6 +135,8 @@ const foodSel = (ctx, i, o, l, a) =>
   `input.food[data-ctx="${ctx}"][data-i="${i}"][data-o="${o}"][data-l="${l}"][data-a="${a}"]`;
 const zeroChoice = () => ({ option: 0, lines: {} });
 // Meals by time ("HH:MM" compares as text); meals without a time last. Stable: equal times keep their order.
+// A meal is eaten with profile `pid` when its shared_with is absent/null (everyone) or lists it.
+const sharesWith = (m, pid) => !Array.isArray(m.shared_with) || m.shared_with.includes(pid);
 const byTime = (a, b) => { const x = a.time || "~", y = b.time || "~"; return x < y ? -1 : x > y ? 1 : 0; };
 // Mirrors model.py nearest_meal: of the candidates ({ time, tomorrow? }), the one nearest to `now` ("HH:MM" today),
 // before or after; ties go to the future one. ponytail: wall-clock minutes, a DST night can be off by an hour.
@@ -242,7 +244,9 @@ function cleanMeals(meals, changed) {
     if (!options.length) throw new Error(`«${name}»: inserisci almeno un alimento`);
     if (shape(options) !== shape(m.options)) changed.add(m.id);
     // remind: stored only when off (no reminder for this meal); absent means on.
-    return { id: m.id, name, time: m.time || null, options, ...(m.remind === false ? { remind: false } : {}) };
+    // shared_with: stored only as a list (profiles it is eaten with); absent means everyone.
+    return { id: m.id, name, time: m.time || null, options, ...(m.remind === false ? { remind: false } : {}),
+      ...(Array.isArray(m.shared_with) ? { shared_with: m.shared_with } : {}) };
   });
 }
 function cleanProfile(p) {
@@ -1025,6 +1029,17 @@ class SharedDietPanel extends HTMLElement {
         m[d.f] = d.f === "time" ? el.value || null : el.value;
         return this._markDirty();
       }
+      case "share": {
+        const m = this._list(d.ctx)[Number(d.i)];
+        if (!d.pid) {
+          if (el.checked) delete m.shared_with;
+          else m.shared_with = [];
+        } else {
+          const ids = (m.shared_with ?? []).filter((id) => id !== d.pid);
+          m.shared_with = el.checked ? [...ids, d.pid] : ids;
+        }
+        return this._edit(); // shows or hides the per-profile boxes
+      }
       case "item": {
         const a = this._list(d.ctx)[Number(d.i)].options[Number(d.o)][Number(d.l)].alts[Number(d.a)];
         a[d.f] = d.f === "qty" ? (el.value === "" ? null : Number(el.value)) : el.value;
@@ -1129,18 +1144,38 @@ class SharedDietPanel extends HTMLElement {
   }
 
   // Meals of a date for every profile, grouped by meal name (case/accents ignored), sorted by the group's earliest time.
+  // Same-name meals share a group only through mutual sharing (each includes the other's profile), transitively.
   _groups(s) {
-    const groups = new Map();
+    const byName = new Map();
     for (const p of Object.values(this._profiles)) {
       for (const m of effectiveDay(p, s)) {
         const k = foldText(m.name);
-        if (!groups.has(k)) groups.set(k, { name: m.name, time: m.time, rows: [] });
-        const g = groups.get(k);
-        if (m.time && (!g.time || m.time < g.time)) g.time = m.time; // earliest time of the group
-        g.rows.push({ p, m, r: resolveMeal(m, choiceFor(p, s, m.id), p, this._recipes) });
+        if (!byName.has(k)) byName.set(k, []);
+        byName.get(k).push({ p, m });
       }
     }
-    return [...groups.values()].sort(byTime);
+    const groups = [];
+    for (const rows of byName.values()) {
+      // Union-find over mutual links. ponytail: O(n²) pairs per name, n is at most profiles x meals per day.
+      const parent = rows.map((_, i) => i);
+      const find = (i) => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+      for (let i = 0; i < rows.length; i++) for (let j = i + 1; j < rows.length; j++) {
+        if (sharesWith(rows[i].m, rows[j].p.id) && sharesWith(rows[j].m, rows[i].p.id)) parent[find(i)] = find(j);
+      }
+      const parts = new Map();
+      rows.forEach((row, i) => { const k = find(i); if (!parts.has(k)) parts.set(k, []); parts.get(k).push(row); });
+      // Same name and time: stable order by profile name.
+      const sorted = [...parts.values()].sort((a, b) => a[0].p.name.localeCompare(b[0].p.name, "it"));
+      for (const part of sorted) {
+        const g = { name: part[0].m.name, time: null, rows: [] };
+        for (const { p, m } of part) {
+          if (m.time && (!g.time || m.time < g.time)) g.time = m.time; // earliest time of the group
+          g.rows.push({ p, m, r: resolveMeal(m, choiceFor(p, s, m.id), p, this._recipes) });
+        }
+        groups.push(g);
+      }
+    }
+    return groups.sort(byTime);
   }
 
   // Next meal: of the timed groups of date `s` (list = this._groups(s)) and the first timed group of the day after
@@ -1417,7 +1452,15 @@ class SharedDietPanel extends HTMLElement {
       return `<section class="card" data-act="fold" data-key="${esc(key)}">${head}
         <p class="muted summary">${foods.length ? esc(foods.join(" · ")) : "Nessun alimento"}</p></section>`;
     }
+    // Condiviso con: "Tutti" = absent shared_with; unticked, one box per other profile ([] when none is ticked).
+    const others = Object.values(this._profiles).filter((p) => p.id !== this._draft.id);
+    const all = !Array.isArray(m.shared_with);
+    const box = (pid, label, on) => `<label class="check"><input type="checkbox" data-ch="share" ${at} data-pid="${esc(pid)}"${
+      on ? " checked" : ""}> ${esc(label)}</label>`;
+    const share = others.length || !all ? `<div class="sub-row"><span class="muted">Condiviso con</span>${box("", "Tutti", all)}${
+      all ? "" : others.map((p) => box(p.id, p.name, m.shared_with.includes(p.id))).join("")}</div>` : "";
     return `<section class="card">${head}
+      ${share}
       ${m.options.map((opt, oi) => this._optionEditor(ctx, i, oi, opt, m.options.length)).join("")}
       <div class="row">
         <button class="danger" data-act="delmeal" ${at}>Elimina pasto</button>

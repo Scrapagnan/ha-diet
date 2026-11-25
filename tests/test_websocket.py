@@ -38,13 +38,13 @@ def full_profile(base):
             [{"alts": [item("Insalata", 200.0)]}],
         ],
     )
-    snack = {**meal("snack", None, [[{"alts": [item("Frutta", 1.0, "pz")]}]]), "remind": False}
+    snack = {**meal("snack", None, [[{"alts": [item("Frutta", 1.0, "pz")]}]]), "remind": False, "shared_with": []}
     return {
         **base,
         "person": "person.luca",
         "reminder": {"enabled": True, "minutes": 15, "notify": "notify.mobile_app_x"},
         "week": {str(d): ([lunch, snack] if d == 0 else []) for d in range(7)},
-        "exceptions": {"2026-11-18": [lunch]},
+        "exceptions": {"2026-11-18": [{**lunch, "shared_with": ["other"]}]},
         "choices": {
             "defaults": {"lunch": {"option": 1, "lines": {}}},
             "dates": {
@@ -124,6 +124,10 @@ async def test_full_valid_profile_is_accepted(client):
         pytest.param(lambda p: p["week"]["0"][0]["options"][0][0].update({"alts": []}), id="no-alts"),
         pytest.param(lambda p: p["week"]["0"][0]["options"][0][0]["alts"][0].update({"qty": -1}), id="negative-qty"),
         pytest.param(lambda p: p["week"]["0"][0]["options"][0][0]["alts"][0].update({"qty": True}), id="bool-qty"),
+        pytest.param(lambda p: p["week"]["0"][0].update({"shared_with": "all"}), id="shared-not-list"),
+        pytest.param(lambda p: p["week"]["0"][0].update({"shared_with": [""]}), id="shared-empty-id"),
+        pytest.param(lambda p: p["week"]["0"][0].update({"shared_with": [1]}), id="shared-non-string"),
+        pytest.param(lambda p: p["week"]["0"][0].update({"shared_with": [f"p{k}" for k in range(31)]}), id="shared-too-many"),
         pytest.param(lambda p: p["reminder"].update({"minutes": 241}), id="reminder-too-long"),
         pytest.param(lambda p: p["reminder"].update({"notify": "light.x"}), id="notify-wrong-domain"),
         pytest.param(lambda p: p.update({"person": "luca"}), id="person-wrong-domain"),
