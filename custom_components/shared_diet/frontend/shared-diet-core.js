@@ -355,16 +355,21 @@ const listViewChips = (view) => `<div class="chips">${[["check", "Checkbox"], ["
 // The row to add an item by hand: name, optional quantity and unit (#newitem, #newqty, #newunit, data-act="ladd").
 const todoAddHtml = ({ newItem = "", newQty = "", newUnit = "" } = {}) => `<div class="row"><input class="grow" id="newitem" maxlength="255"
     placeholder="Articolo fuori dieta (es. Detersivo)" aria-label="Nuovo articolo" value="${esc(newItem)}">
-    <input id="newqty" class="nqty" type="number" min="0" max="${MAX_SHOP_QTY}" step="any" inputmode="decimal" placeholder="Qtà"
+    <div class="addrest"><input id="newqty" class="nqty" type="number" min="0" max="${MAX_SHOP_QTY}" step="any" inputmode="decimal" placeholder="Qtà"
       aria-label="Quantità" value="${esc(newQty)}">
-    <input id="newunit" class="nunit" list="units" maxlength="10" placeholder="Unità" aria-label="Unità di misura"
-      value="${esc(newUnit)}">
-    <datalist id="units">${["g", "kg", "ml", "l", "pz", "conf"].map((u) => `<option value="${u}">`).join("")}</datalist>
-    <button data-act="ladd">Aggiungi</button></div>`;
+    <select id="newunit" class="nunit" aria-label="Unità di misura">${["", "g", "kg", "ml", "l", "pz", "conf"].map((u) =>
+      `<option value="${u}"${u === newUnit ? " selected" : ""}>${u || "Unità"}</option>`).join("")}</select>
+    <button data-act="ladd">Aggiungi</button></div></div>`;
 
 const LIST_CSS = `
+/* Quantity, unit and button wrap together: when the row is too narrow the name stays alone on the first line. */
+.addrest { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
 .nqty { width: 80px; }
-.nunit { width: 72px; }
+.nunit { width: 92px; }
+/* Native picker on tap, but styled like the inputs: same height, own arrow, long options cut with an ellipsis. */
+select { appearance: none; -webkit-appearance: none; padding-right: 28px; text-overflow: ellipsis; cursor: pointer;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: right 14px center, right 9px center; background-size: 5px 5px; background-repeat: no-repeat; }
 .lgroup { margin-top: 24px; padding-top: 12px; border-top: 2px solid var(--divider-color, #e0e0e0); }
 .lgroup h3 { margin: 0 0 8px; }
 .lcards { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }

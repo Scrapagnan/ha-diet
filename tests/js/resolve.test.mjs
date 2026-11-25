@@ -16,9 +16,9 @@ const ctx = {
   crypto: globalThis.crypto, // uid() in the panel
   CustomEvent: class { constructor(type, init) { this.type = type; Object.assign(this, init); } },
 };
-const { expandItem, fmtItem, resolveMeal, cleanProfile, cleanRecipe, setRecipeQty, matchRecipes, cadenceRange, sumItems, nearestMeal, SharedDietPanel } = loadPanel(ctx, [
+const { expandItem, fmtItem, resolveMeal, cleanProfile, cleanRecipe, setRecipeQty, matchRecipes, cadenceRange, sumItems, nearestMeal, SharedDietPanel, todoAddHtml } = loadPanel(ctx, [
   "expandItem", "fmtItem", "resolveMeal", "cleanProfile", "cleanRecipe", "setRecipeQty", "matchRecipes", "cadenceRange", "sumItems",
-  "nearestMeal", "SharedDietPanel",
+  "nearestMeal", "SharedDietPanel", "todoAddHtml",
 ]);
 // Recipe draft cleaning: trims, drops alternatives without food and ingredients left without any, keeps ids and rev, rejects negative quantities.
 {
@@ -585,7 +585,16 @@ const RECIPES = {
   p._shop.skip.add("Pasta - 80 g");
   html2 = p._body();
   assert.match(html2, /aria-checked="mixed" data-act="shopall"/);
-  assert.match(html2, /data-ch="sitem" data-i="1">/);
+  assert.match(html2, /data-ch="sitem" data-i="1" aria-label="Pasta">/);
+  // Each food is a card: a tap on it ticks its checkbox; name first, then quantity and category; "off" when unticked.
+  assert.match(html2, /<div class="scard off" data-act="scard"><input type="checkbox" class="spick" data-ch="sitem" data-i="1"[^>]*><span class="sname">Pasta<\/span>[^]*?data-ch="sqty"[^]*?data-ch="scat"[^]*?<\/div>/);
+  {
+    let clicked = 0;
+    const card = { dataset: { act: "scard" }, querySelector: () => ({ click: () => clicked++ }) };
+    p._onClick({ target: { closest: (s) => (s === "input, select" ? null : card) } }); // on the card: ticks
+    p._onClick({ target: { closest: (s) => (s === "input, select" ? {} : card) } }); // on its fields: no
+    assert.equal(clicked, 1);
+  }
   p._onClick({ target: { closest: () => ({ dataset: { act: "shopall" } }) } }); // mixed -> all on
   assert.equal(p._shopAll(), "true");
   p._onClick({ target: { closest: () => ({ dataset: { act: "shopall" } }) } }); // on -> all off
@@ -1102,5 +1111,14 @@ const RECIPES = {
   p._listWatch();
   await new Promise((r) => setTimeout(r));
   assert.equal(unsubbed, 1);
+}
+// Lista: the unit is a select (a datalist opens no picker on mobile); the pick is kept across re-renders.
+{
+  assert.match(todoAddHtml({ newUnit: "kg" }), /<select id="newunit"[^>]*><option value="">Unità<\/option>[^]*<option value="kg" selected>kg</);
+  assert.match(todoAddHtml(), /<option value="" selected>Unità</); // no unit by default
+  assert.doesNotMatch(todoAddHtml(), /datalist/);
+  const p = new SharedDietPanel();
+  p._onChange({ target: { id: "newunit", value: "pz", dataset: {} } });
+  assert.equal(p._todoList.newUnit, "pz");
 }
 console.log("resolve.test.mjs: all assertions passed");

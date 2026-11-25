@@ -26,11 +26,11 @@ ha-card.list { cursor: default; }
 .head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .head h2 { margin: 0; }
 h3 { font-size: 15px; font-weight: 500; }
-button, input { font: inherit; color: inherit; }
+button, input, select { font: inherit; color: inherit; }
 button { min-height: 36px; padding: 6px 12px; border: 1px solid var(--divider-color, #e0e0e0); border-radius: 8px;
   background: var(--card-background-color, #fff); cursor: pointer; }
-input { padding: 6px 8px; min-width: 0; max-width: 100%; border: 1px solid var(--divider-color, #e0e0e0);
-  border-radius: 6px; background: var(--card-background-color, #fff); }
+input, select { padding: 6px 8px; min-width: 0; max-width: 100%; min-height: 36px; border: 1px solid var(--divider-color, #e0e0e0);
+  border-radius: 6px; background-color: var(--card-background-color, #fff); }
 .chips { display: flex; gap: 4px; }
 button.chip { padding: 4px 10px; min-height: 0; }
 button.chip.on { background: var(--primary-color, #03a9f4); color: var(--text-primary-color, #fff); border-color: transparent; }
