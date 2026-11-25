@@ -208,7 +208,8 @@ async def test_subscribe_pushes_on_change(client):
     await client.send_json_auto_id({"type": "shared_diet/subscribe"})
     assert (await client.receive_json())["success"]
     event = await client.receive_json()
-    assert event["type"] == "event" and event["event"] == {"profiles": client.store.profiles, "recipes": {}}
+    assert event["type"] == "event" and event["event"] == client.store.snapshot()
+    assert set(event["event"]) == {"profiles", "recipes", "categories", "food_categories"}
 
     await client.send_json_auto_id({"type": "shared_diet/save_profile", "profile": full_profile(own_profile(client))})
     msgs = [await client.receive_json(), await client.receive_json()]
@@ -231,7 +232,7 @@ async def test_shopping_adds_to_todo(hass, client):
         profile_ids=None,
         todo_entity_id="todo.spesa",
     )
-    assert resp["result"]["items"] == ["Pasta - 80 g"]
+    assert resp["result"]["items"] == [{"text": "Pasta - 80 g", "food": "Pasta", "category": "pasta_cereali"}]
     assert len(calls) == 1
     assert calls[0].data == {"entity_id": "todo.spesa", "item": "Pasta - 80 g"}
 
@@ -244,11 +245,11 @@ async def test_shopping_preview_and_exclude(hass, client):
     base = {"start": MONDAY.isoformat(), "end": MONDAY.isoformat(), "profile_ids": None}
 
     resp = await call(client, "shopping", **base)  # no todo entity: preview only
-    assert resp["result"]["items"] == ["Olio - 10 ml", "Pasta - 80 g"]
+    assert [r["text"] for r in resp["result"]["items"]] == ["Pasta - 80 g", "Olio - 10 ml"]  # category order
     assert calls == []
 
     resp = await call(client, "shopping", **base, todo_entity_id="todo.spesa", exclude=["Olio - 10 ml"])
-    assert resp["result"]["items"] == ["Pasta - 80 g"]
+    assert [r["text"] for r in resp["result"]["items"]] == ["Pasta - 80 g"]
     assert [c.data["item"] for c in calls] == ["Pasta - 80 g"]
 
     resp = await call(client, "shopping", **base, exclude=["x" * 1001])  # each excluded row is length-capped

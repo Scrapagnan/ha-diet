@@ -10,13 +10,15 @@ from collections.abc import Callable, Iterator
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 
-from .const import STORAGE_KEY, STORAGE_VERSION
-from .model import fold_name
+from .const import DEFAULT_CATEGORIES, FALLBACK_CATEGORY, STORAGE_KEY, STORAGE_VERSION
+from .model import effective_order, fold_name
 
 _LOGGER = logging.getLogger(__name__)
 
 # Cap on a meal's shared_with list. Profiles themselves are one per HA user, so the HA admin bounds their number.
 MAX_PROFILES = 100
+MAX_CATEGORIES = 50
+MAX_FOOD_CATEGORIES = 2000  # food -> category overrides
 
 
 class ConflictError(Exception):
@@ -24,7 +26,11 @@ class ConflictError(Exception):
 
 
 class DuplicateNameError(Exception):
-    """Another recipe already has this name (fold_name comparison)."""
+    """Another recipe or category already has this name (fold_name comparison)."""
+
+
+class LimitError(Exception):
+    """Too many categories or food overrides."""
 
 
 class UnknownRecipeError(ValueError):
@@ -68,6 +74,9 @@ class DietStore:
         self._store: Store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
         self._profiles: dict[str, dict] = {}
         self._recipes: dict[str, dict] = {}
+        self._categories: list[dict] = []  # the house's shopping categories, in list order
+        self._food_categories: dict[str, str] = {}  # fold_name(food) -> category id
+        self._category_order: dict[str, list[str]] = {}  # HA user id -> saved order; not in the snapshot
         self._listeners: list[Callable[[], None]] = []
         self._snapshot: dict | None = None
 
@@ -75,6 +84,9 @@ class DietStore:
         data = await self._store.async_load() or {}
         self._profiles = data.get("profiles", {})
         self._recipes = data.get("recipes", {})
+        self._categories = data["categories"] if "categories" in data else copy.deepcopy(DEFAULT_CATEGORIES)
+        self._food_categories = data.get("food_categories", {})
+        self._category_order = data.get("category_order", {})
         for profile in self._profiles.values():
             profile.setdefault("recipe_qty", {})
             profile.setdefault("user_id", None)
@@ -95,7 +107,14 @@ class DietStore:
     def snapshot(self) -> dict:
         """One copy of all data per commit, shared by every reader. Read-only: never mutate it."""
         if self._snapshot is None:
-            self._snapshot = {"profiles": copy.deepcopy(self._profiles), "recipes": copy.deepcopy(self._recipes)}
+            self._snapshot = copy.deepcopy(
+                {
+                    "profiles": self._profiles,
+                    "recipes": self._recipes,
+                    "categories": self._categories,
+                    "food_categories": self._food_categories,
+                }
+            )
         return self._snapshot
 
     def profile(self, profile_id: str) -> dict | None:
@@ -201,6 +220,63 @@ class DietStore:
         del self._recipes[recipe_id]
         await self._async_commit()
 
+    # Categories: atomic commands, last write wins (no rev).
+
+    async def async_create_category(self, name: str) -> dict:
+        if len(self._categories) >= MAX_CATEGORIES:
+            raise LimitError
+        self._check_category_name(name, None)
+        category = {"id": uuid.uuid4().hex, "name": name}
+        self._categories.append(category)
+        await self._async_commit()
+        return dict(category)
+
+    async def async_rename_category(self, category_id: str, name: str) -> None:
+        category = self._category(category_id)
+        self._check_category_name(name, category_id)
+        category["name"] = name
+        await self._async_commit()
+
+    async def async_delete_category(self, category_id: str) -> None:
+        """Raises KeyError if missing, ValueError for "altro". Its overrides go: those foods are assigned automatically again."""
+        category = self._category(category_id)
+        if category_id == FALLBACK_CATEGORY:
+            raise ValueError(category_id)
+        self._categories.remove(category)
+        self._food_categories = {food: cid for food, cid in self._food_categories.items() if cid != category_id}
+        for order in self._category_order.values():
+            if category_id in order:
+                order.remove(category_id)
+        await self._async_commit()
+
+    async def async_set_food_category(self, food: str, category_id: str | None) -> None:
+        """None removes the override. Raises KeyError for an unknown category, ValueError for a blank food."""
+        key = fold_name(food)
+        if not key:
+            raise ValueError(food)
+        if category_id is None:
+            if self._food_categories.pop(key, None) is not None:
+                await self._async_commit()
+            return
+        self._category(category_id)
+        if key not in self._food_categories and len(self._food_categories) >= MAX_FOOD_CATEGORIES:
+            raise LimitError
+        self._food_categories[key] = category_id
+        await self._async_commit()
+
+    def category_order(self, user_id: str) -> list[str]:
+        return effective_order(self._category_order.get(user_id, []), self._categories)
+
+    async def async_set_category_order(self, user_id: str, order: list[str]) -> list[str]:
+        """Raises KeyError for an unknown id; duplicates are dropped. Returns the effective order."""
+        known = {c["id"] for c in self._categories}
+        unknown = [cid for cid in order if cid not in known]
+        if unknown:
+            raise KeyError(unknown[0])
+        self._category_order[user_id] = list(dict.fromkeys(order))
+        await self._async_save()  # not in the snapshot: nobody else needs a push
+        return self.category_order(user_id)
+
     def async_add_listener(self, cb: Callable[[], None]) -> Callable[[], None]:
         self._listeners.append(cb)
 
@@ -214,12 +290,26 @@ class DietStore:
         if any(fold_name(r["name"]) == key for rid, r in self._recipes.items() if rid != own_id):
             raise DuplicateNameError(name)
 
+    def _category(self, category_id: str) -> dict:
+        category = next((c for c in self._categories if c["id"] == category_id), None)
+        if category is None:
+            raise KeyError(category_id)
+        return category
+
+    def _check_category_name(self, name: str, own_id: str | None) -> None:
+        key = fold_name(name)
+        if any(fold_name(c["name"]) == key for c in self._categories if c["id"] != own_id):
+            raise DuplicateNameError(name)
+
     def _alt_ids(self, recipe_id: str) -> set[str]:
         return {a["id"] for i in self._recipes[recipe_id]["ingredients"] for a in i["alts"]}
 
+    async def _async_save(self) -> None:
+        await self._store.async_save({**self.snapshot(), "category_order": copy.deepcopy(self._category_order)})
+
     async def _async_commit(self) -> None:
         self._snapshot = None
-        await self._store.async_save(self.snapshot())
+        await self._async_save()
         for cb in list(self._listeners):
             try:
                 cb()

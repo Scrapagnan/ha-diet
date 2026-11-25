@@ -74,6 +74,11 @@ input, select { padding: 6px 8px; min-width: 0; max-width: 100%; border: 1px sol
 textarea { font: inherit; font-size: 16px; color: inherit; width: 100%; padding: 6px 8px; border: 1px solid var(--divider-color, #e0e0e0);
   border-radius: 6px; background: var(--card-background-color, #fff); }
 details p { white-space: pre-line; margin: 6px 0; }
+#cats { margin: 16px 0; }
+#cats summary { cursor: pointer; font-size: 16px; padding: 8px 0; }
+.shoprow { justify-content: space-between; flex-wrap: nowrap; }
+.shoprow label { margin: 0; min-width: 0; }
+.shoprow select { flex: 0 1 160px; }
 .or { font-size: 12px; font-weight: 600; text-align: center; color: var(--secondary-text-color, #727272); }
 .chips { display: flex; gap: 4px; }
 .remind button.chip { flex: 0 0 auto; padding: 6px 10px; }
@@ -341,6 +346,7 @@ class SharedDietPanel extends HTMLElement {
     this._view = "today";
     this._profiles = null; // last subscribe payload
     this._recipes = {}; // recipe book from the same payload, by id
+    this._categories = []; // the house's shopping categories [{id, name}], same payload
     this._loadError = "";
     this._profileId = null;
     this._draft = null; // editable copy of the selected profile
@@ -356,7 +362,7 @@ class SharedDietPanel extends HTMLElement {
     this._wday = weekday(today); // Settimana and Scelte views
     let cadence = "1w";
     try { cadence = localStorage.getItem("shared_diet.cadence") ?? "1w"; } catch { /* storage blocked */ }
-    this._shop = { cadence: CADENCES.some(([k]) => k === cadence) ? cadence : "1w", off: new Set(), todo: "", preview: null, skip: new Set(), seq: 0 };
+    this._shop = { cadence: CADENCES.some(([k]) => k === cadence) ? cadence : "1w", off: new Set(), todo: "", preview: null, skip: new Set(), seq: 0, order: [] };
     this.shadowRoot.addEventListener("click", (e) => this._onClick(e));
     this.shadowRoot.addEventListener("change", (e) => this._onChange(e));
     this.shadowRoot.addEventListener("input", (e) => this._onInput(e));
@@ -474,7 +480,7 @@ class SharedDietPanel extends HTMLElement {
 
   _subscribe() {
     this._unsub = this._hass.connection
-      .subscribeMessage((msg) => this._onData(msg.profiles, msg.recipes), { type: "shared_diet/subscribe" })
+      .subscribeMessage((msg) => this._onData(msg.profiles, msg.recipes, msg.categories), { type: "shared_diet/subscribe" })
       .catch((err) => {
         this._loadError = err?.message || "Impossibile caricare i dati";
         this._render();
@@ -483,9 +489,10 @@ class SharedDietPanel extends HTMLElement {
   }
 
   // Latest server data. Unsaved edits to the selected profile survive; a deleted profile resets the selection.
-  _onData(profiles, recipes) {
+  _onData(profiles, recipes, categories) {
     this._profiles = profiles;
     this._recipes = recipes ?? {};
+    this._categories = categories ?? [];
     if (!profiles[this._profileId]) {
       this._profileId = this._ownId() ?? Object.keys(profiles)[0] ?? null;
       this._draft = null;
@@ -768,17 +775,21 @@ class SharedDietPanel extends HTMLElement {
     this._shop.preview = null;
     this._shop.failed = false;
     if (this._view === "shop") this._render();
-    let items = [], failed = null;
-    if (msg.profile_ids?.length !== 0 && Object.keys(this._profiles).length) {
-      try {
-        items = (await this._hass.callWS(msg)).items;
-      } catch (err) {
-        failed = err;
-      }
+    const wanted = msg.profile_ids?.length !== 0 && Object.keys(this._profiles).length;
+    let items = [], order = null, failed = null;
+    try {
+      // The user's category order comes along: it groups the preview and lists the categories.
+      [items, order] = await Promise.all([
+        wanted ? this._hass.callWS(msg).then((r) => r.items) : [],
+        this._hass.callWS({ type: "shared_diet/get_category_order" }).then((r) => r.order),
+      ]);
+    } catch (err) {
+      failed = err;
     }
     if (seq !== this._shop.seq) return;
     if (failed) this._flash(failed?.message || "Impossibile calcolare la spesa");
-    this._shop.preview = items;
+    if (order) this._shop.order = order;
+    this._shop.preview = failed ? [] : items;
     this._shop.failed = !!failed;
     if (this._view === "shop") this._render();
   }
@@ -786,7 +797,7 @@ class SharedDietPanel extends HTMLElement {
   // Master switch: true/false/mixed over the previewed rows.
   _shopAll() {
     const rows = this._shop.preview ?? [];
-    const off = rows.filter((t) => this._shop.skip.has(t)).length;
+    const off = rows.filter((r) => this._shop.skip.has(r.text)).length;
     return !rows.length || off === rows.length ? "false" : off ? "mixed" : "true";
   }
 
@@ -794,11 +805,59 @@ class SharedDietPanel extends HTMLElement {
     const todo = this._todo();
     if (!todo) return this._flash("Nessuna lista To-do disponibile");
     if (!this._shop.preview || this._shop.failed) return;
-    const exclude = (this._shop.preview ?? []).filter((t) => this._shop.skip.has(t));
+    const exclude = (this._shop.preview ?? []).map((r) => r.text).filter((t) => this._shop.skip.has(t));
     if (this._shopAll() === "false") return this._flash("Nessun alimento selezionato");
     return this._run(async () => {
       await this._hass.callWS({ ...this._shopMsg(), todo_entity_id: todo, exclude });
     }, "Lista della spesa aggiornata");
+  }
+
+  // This user's category order: the saved one on existing categories, then the rest in list order (as the server does).
+  _catOrder() {
+    const ids = this._categories.map((c) => c.id);
+    const order = [...new Set(this._shop.order)].filter((id) => ids.includes(id));
+    return [...order, ...ids.filter((id) => !order.includes(id))];
+  }
+
+  _moveCategory(id, step) {
+    const order = this._catOrder();
+    const i = order.indexOf(id), j = i + step;
+    if (i < 0 || j < 0 || j >= order.length) return;
+    [order[i], order[j]] = [order[j], order[i]];
+    this._shop.order = order; // shown at once; the preview regroups by it on render
+    return this._run(async () => {
+      this._shop.order = (await this._hass.callWS({ type: "shared_diet/set_category_order", order })).order;
+    });
+  }
+
+  _addCategory() {
+    const name = this.shadowRoot.getElementById("newcat")?.value.trim();
+    if (!name) return this._flash("Scrivi il nome della categoria");
+    return this._run(() => this._hass.callWS({ type: "shared_diet/create_category", name }), "Categoria aggiunta");
+  }
+
+  _renameCategory(id, input) {
+    const name = input.value.trim();
+    const cur = this._categories.find((c) => c.id === id);
+    if (!cur || name === cur.name) return;
+    if (!name) {
+      input.value = cur.name;
+      return this._flash("Il nome della categoria è obbligatorio");
+    }
+    return this._run(() => this._hass.callWS({ type: "shared_diet/rename_category", category_id: id, name }), "Categoria rinominata");
+  }
+
+  _deleteCategory(id) {
+    const cur = this._categories.find((c) => c.id === id);
+    if (!cur || !confirm(`Eliminare la categoria «${cur.name}»? Gli alimenti assegnati a mano tornano alla categoria automatica.`)) return;
+    return this._run(() => this._hass.callWS({ type: "shared_diet/delete_category", category_id: id }), "Categoria eliminata");
+  }
+
+  // Valid for every profile and every user: the push that follows reloads the preview.
+  _setFoodCategory(i, id) {
+    const row = this._shop.preview?.[i];
+    if (!row || row.category === id) return;
+    return this._run(() => this._hass.callWS({ type: "shared_diet/set_food_category", food: row.food, category_id: id }));
   }
 
   // Meal list addressed by ctx: "w<weekday>" (weekly schema).
@@ -889,10 +948,14 @@ class SharedDietPanel extends HTMLElement {
       case "shop": return this._runShop();
       case "shopall": {
         const on = this._shopAll() !== "true";
-        this._shop.skip = on ? new Set() : new Set(this._shop.preview);
+        this._shop.skip = on ? new Set() : new Set(this._shop.preview.map((r) => r.text));
         return this._render();
       }
       case "alts": this._showAlts = !this._showAlts; return this._render();
+      case "catup": return this._moveCategory(d.cid, -1);
+      case "catdown": return this._moveCategory(d.cid, 1);
+      case "catdel": return this._deleteCategory(d.cid);
+      case "catadd": return this._addCategory();
       case "wday": this._wday = Number(d.d); return this._render();
     }
     if (!d.ctx) return;
@@ -998,13 +1061,15 @@ class SharedDietPanel extends HTMLElement {
         return this._markRecipeDirty();
       }
       case "stodo": this._shop.todo = el.value; return;
+      case "scat": return this._setFoodCategory(Number(d.i), el.value);
+      case "catname": return this._renameCategory(d.cid, el);
       case "sprof":
         if (el.checked) this._shop.off.delete(d.id);
         else this._shop.off.add(d.id);
         return this._loadShop();
       case "sitem": {
         // Updated in place: a full render would move focus away from the switch.
-        const t = this._shop.preview?.[Number(d.i)];
+        const t = this._shop.preview?.[Number(d.i)]?.text;
         if (t === undefined) return;
         if (el.checked) this._shop.skip.delete(t);
         else this._shop.skip.add(t);
@@ -1306,20 +1371,43 @@ class SharedDietPanel extends HTMLElement {
       : `<p class="msg err">Nessuna lista To-do: creane una in Home Assistant.</p>`;
     const rows = this._shop.preview;
     const all = this._shopAll();
+    const order = this._catOrder();
+    const names = Object.fromEntries(this._categories.map((c) => [c.id, c.name]));
+    const catOpts = (sel) => order.map((id) => `<option value="${esc(id)}"${id === sel ? " selected" : ""}>${esc(names[id])}</option>`).join("");
+    // One group per category in this user's order; empty categories are left out.
+    const groups = order.map((cid) => {
+      const group = (rows ?? []).map((r, i) => [r, i]).filter(([r]) => r.category === cid);
+      return group.length ? `<h3>${esc(names[cid])}</h3>${group.map(([r, i]) =>
+        `<div class="check shoprow"><label class="check"><input type="checkbox" role="switch" class="switch" data-ch="sitem" data-i="${i}"${
+          this._shop.skip.has(r.text) ? "" : " checked"}> ${esc(r.text)}</label>
+          <select data-ch="scat" data-i="${i}" aria-label="Categoria di ${esc(r.food)}">${catOpts(r.category)}</select></div>`).join("")}` : "";
+    }).join("");
     const items = rows === null ? `<p class="muted">Caricamento…</p>`
       : this._shop.failed ? `<p class="msg err">Impossibile calcolare la spesa.</p>`
       : rows.length ? `<div class="check"><button class="switch" role="checkbox" aria-checked="${all}" data-act="shopall"
-          aria-label="Tutti gli alimenti"></button> Tutti gli alimenti</div>${rows.map((t, i) =>
-          `<label class="check"><input type="checkbox" role="switch" class="switch" data-ch="sitem" data-i="${i}"${
-            this._shop.skip.has(t) ? "" : " checked"}> ${esc(t)}</label>`).join("")}`
+          aria-label="Tutti gli alimenti"></button> Tutti gli alimenti</div>${groups}`
       : `<p class="muted">Nessun alimento nell'intervallo.</p>`;
+    // Kept open across re-renders once the user opened it.
+    const open = this.shadowRoot.getElementById("cats")?.open ? " open" : "";
+    const cats = order.map((id, i) => `<div class="row">
+        <input class="grow" data-ch="catname" data-cid="${esc(id)}" value="${esc(names[id])}" maxlength="40" aria-label="Nome categoria">
+        <button class="icon" data-act="catup" data-cid="${esc(id)}" aria-label="Sposta su"${i ? "" : " disabled"}>↑</button>
+        <button class="icon" data-act="catdown" data-cid="${esc(id)}" aria-label="Sposta giù"${i < order.length - 1 ? "" : " disabled"}>↓</button>
+        ${id === "altro" ? "" : `<button class="icon danger" data-act="catdel" data-cid="${esc(id)}" aria-label="Elimina categoria">×</button>`}
+      </div>`).join("");
     return `<div class="page-head"><h2>Lista della spesa</h2>
         <button class="primary" data-act="shop"${todo && all !== "false" && !this._busy ? "" : " disabled"}>Aggiungi alla lista</button></div>
       <label class="row">Cadenza <select data-ch="cadence">${CADENCES.map(([k, l]) =>
         `<option value="${k}"${k === this._shop.cadence ? " selected" : ""}>${l}</option>`).join("")}</select></label>
       <fieldset><legend>Profili</legend>${profiles}</fieldset>
       ${todoSel}
-      <fieldset><legend>Da comprare</legend>${items}</fieldset>`;
+      <fieldset><legend>Da comprare</legend>${items}</fieldset>
+      <details id="cats"${open}><summary>Categorie</summary>
+        <p class="muted">Ordinale come il tuo percorso nel supermercato: l'ordine vale solo per te, le categorie per tutti.</p>
+        ${cats}
+        <div class="row"><input class="grow" id="newcat" maxlength="40" placeholder="Nuova categoria">
+          <button data-act="catadd">Aggiungi categoria</button></div>
+      </details>`;
   }
 
   // One foldable card per recipe, like the Settimana meals; the name is always editable. Any number of recipes can be

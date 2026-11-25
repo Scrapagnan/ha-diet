@@ -248,5 +248,5 @@ async def test_shopping_expands_recipe_ingredients(hass, client):
         profile_ids=None,
         todo_entity_id="todo.spesa",
     )
-    assert resp["result"]["items"] == ["Farina - 60 g", "Uova - 1 pz"]
-    assert [c.data["item"] for c in calls] == ["Farina - 60 g", "Uova - 1 pz"]
+    assert [r["text"] for r in resp["result"]["items"]] == ["Uova - 1 pz", "Farina - 60 g"]  # latticini_uova first
+    assert [c.data["item"] for c in calls] == ["Uova - 1 pz", "Farina - 60 g"]

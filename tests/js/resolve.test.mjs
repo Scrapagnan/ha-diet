@@ -577,7 +577,8 @@ const RECIPES = {
   assert.match(p._body(), /role="switch" class="switch" data-ch="sprof"/);
   assert.doesNotMatch(p._body(), /Dal .* al /);
   assert.match(p._body(), /Caricamento/);
-  p._shop.preview = ["Olio - 10 ml", "Pasta - 80 g"];
+  p._categories = [{ id: "pasta_cereali", name: "Pasta e riso" }, { id: "condimenti", name: "Condimenti" }, { id: "altro", name: "Altro" }];
+  p._shop.preview = [{ text: "Olio - 10 ml", food: "Olio", category: "condimenti" }, { text: "Pasta - 80 g", food: "Pasta", category: "pasta_cereali" }];
   let html2 = p._body();
   assert.match(html2, /class="page-head"><h2>Lista della spesa<\/h2>\s*<button class="primary" data-act="shop">/);
   assert.match(html2, /aria-checked="true" data-act="shopall"/);
@@ -603,6 +604,46 @@ const RECIPES = {
   await p._loadShop();
   assert.equal("todo_entity_id" in sent[1], false);
   assert.deepEqual(plain(p._shop.preview), ["Olio - 10 ml"]);
+  assert.equal(sent[2].type, "shared_diet/get_category_order"); // loaded with every preview
+}
+{
+  // Spesa grouped by category in the user's order (saved order first, unknown ids dropped, the rest in list order);
+  // empty categories hidden; each row has a category select; "altro" cannot be deleted.
+  const p = new SharedDietPanel();
+  p._render = () => {};
+  p._view = "shop";
+  p._profiles = {};
+  p._hass = { states: {} };
+  p._categories = [{ id: "frutta", name: "Frutta" }, { id: "carne", name: "Carne" }, { id: "nuova", name: "Nuova" }, { id: "altro", name: "Altro" }];
+  p._shop.order = ["carne", "gone", "frutta", "carne"];
+  assert.deepEqual(plain(p._catOrder()), ["carne", "frutta", "nuova", "altro"]);
+  p._shop.preview = [
+    { text: "Mele - 2 pz", food: "Mele", category: "frutta" },
+    { text: "Pollo - 300 g", food: "Pollo", category: "carne" },
+    { text: "Zzz", food: "Zzz", category: "altro" },
+  ];
+  const html = p._body();
+  const heads = [...html.matchAll(/<h3>([^<]+)<\/h3>/g)].map((m) => m[1]);
+  assert.deepEqual(heads, ["Carne", "Frutta", "Altro"]);
+  assert.match(html, /data-ch="scat" data-i="1" aria-label="Categoria di Pollo"><option value="carne" selected>/);
+  assert.match(html, /data-act="catdel" data-cid="nuova"/);
+  assert.doesNotMatch(html, /data-act="catdel" data-cid="altro"/);
+  assert.match(html, /data-act="catup" data-cid="carne" aria-label="Sposta su" disabled/);
+  const sent = [];
+  p._hass.callWS = async (m) => { sent.push(plain(m)); return m.type === "shared_diet/set_category_order" ? { order: m.order } : {}; };
+  p.dispatchEvent = () => {};
+  p._flash = (m) => { throw new Error(m); };
+  await p._moveCategory("altro", -1);
+  assert.deepEqual(sent.at(-1), { type: "shared_diet/set_category_order", order: ["carne", "frutta", "altro", "nuova"] });
+  assert.deepEqual(plain(p._catOrder()), ["carne", "frutta", "altro", "nuova"]);
+  await p._setFoodCategory(0, "altro"); // the food name, not the row text
+  assert.deepEqual(sent.at(-1), { type: "shared_diet/set_food_category", food: "Mele", category_id: "altro" });
+  const before = sent.length;
+  await p._setFoodCategory(0, "frutta"); // unchanged: nothing sent
+  await p._renameCategory("carne", { value: "  Carne " });
+  assert.equal(sent.length, before);
+  await p._renameCategory("carne", { value: " Macelleria " });
+  assert.deepEqual(sent.at(-1), { type: "shared_diet/rename_category", category_id: "carne", name: "Macelleria" });
 }
 {
   // Oggi: all profiles, grouped by meal name (case/spaces ignored); totals summed per food+unit and per recipe ingredient;
@@ -819,13 +860,12 @@ const RECIPES = {
   await loading;
   const flashes = [];
   s._flash = (t) => flashes.push(t);
-  let fail;
-  s._hass.callWS = () => new Promise((_, rej) => { fail = rej; });
+  const fails = [];
+  s._hass.callWS = () => new Promise((_, rej) => { fails.push(rej); });
   const stale = s._loadShop();
-  const failStale = fail;
   s._hass.callWS = async () => { throw { message: "Intervallo non valido" }; };
   await s._loadShop();
-  failStale({ message: "vecchio" });
+  fails.forEach((f) => f({ message: "vecchio" }));
   await stale;
   assert.deepEqual(flashes, ["Intervallo non valido"]);
   assert.match(s._body(), /Impossibile calcolare la spesa\./);

@@ -16,7 +16,16 @@ from homeassistant.helpers import config_validation as cv
 
 from .const import DOMAIN
 from .model import fold_name, shopping_items
-from .store import MAX_PROFILES, ConflictError, DietStore, DuplicateNameError, InUseError, UnknownRecipeError
+from .store import (
+    MAX_CATEGORIES,
+    MAX_PROFILES,
+    ConflictError,
+    DietStore,
+    DuplicateNameError,
+    InUseError,
+    LimitError,
+    UnknownRecipeError,
+)
 
 MAX_SPAN_DAYS = 62
 # Cardinality caps: resolving a meal costs lines x recipe ingredients, so every list needs a bound.
@@ -104,6 +113,7 @@ def _recipe_name(value: Any) -> str:
 
 
 RECIPE_NAME = vol.All(str, _recipe_name)
+CATEGORY_NAME = vol.All(str, vol.Strip, vol.Length(max=40), _recipe_name)
 TIME = _pattern(r"([01]\d|2[0-3]):[0-5]\d")
 PERSON = vol.Any(None, _pattern(r"person\.[a-z0-9_]+"))
 NOTIFY = vol.Any(None, _pattern(r"notify\.[a-z0-9_]+"))
@@ -338,14 +348,16 @@ async def ws_shopping(hass: HomeAssistant, connection: websocket_api.ActiveConne
             return
         selected = [profiles[pid] for pid in dict.fromkeys(msg["profile_ids"])]
 
-    items = shopping_items(selected, start, end, data["recipes"])
+    items = shopping_items(selected, start, end, data["recipes"], data["categories"], data["food_categories"])
+    position = {cid: i for i, cid in enumerate(store.category_order(connection.user.id))}
+    items.sort(key=lambda row: position[row["category"]])  # stable: by name within a category
     if "todo_entity_id" not in msg:
         connection.send_result(msg["id"], {"items": items})
         return
     excluded = set(msg["exclude"])
-    items = [text for text in items if text not in excluded]
+    items = [row for row in items if row["text"] not in excluded]
     try:
-        for text in items:
+        for text in (row["text"] for row in items):
             # The caller's context makes HA enforce their own permission on the todo entity.
             await hass.services.async_call(
                 "todo",
@@ -360,6 +372,124 @@ async def ws_shopping(hass: HomeAssistant, connection: websocket_api.ActiveConne
     connection.send_result(msg["id"], {"items": items})
 
 
+_DUPLICATE_CATEGORY = "Esiste già una categoria con questo nome"
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): "shared_diet/create_category", vol.Required("name"): CATEGORY_NAME}
+)
+@websocket_api.async_response
+async def ws_create_category(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    store = _store(hass, connection, msg)
+    if store is None:
+        return
+    try:
+        category = await store.async_create_category(msg["name"])
+    except DuplicateNameError:
+        connection.send_error(msg["id"], "duplicate_name", _DUPLICATE_CATEGORY)
+        return
+    except LimitError:
+        connection.send_error(msg["id"], "invalid_format", f"Massimo {MAX_CATEGORIES} categorie")
+        return
+    connection.send_result(msg["id"], {"category": category})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "shared_diet/rename_category",
+        vol.Required("category_id"): str,
+        vol.Required("name"): CATEGORY_NAME,
+    }
+)
+@websocket_api.async_response
+async def ws_rename_category(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    store = _store(hass, connection, msg)
+    if store is None:
+        return
+    try:
+        await store.async_rename_category(msg["category_id"], msg["name"])
+    except KeyError:
+        connection.send_error(msg["id"], "not_found", "Categoria non trovata")
+        return
+    except DuplicateNameError:
+        connection.send_error(msg["id"], "duplicate_name", _DUPLICATE_CATEGORY)
+        return
+    connection.send_result(msg["id"], {})
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): "shared_diet/delete_category", vol.Required("category_id"): str}
+)
+@websocket_api.async_response
+async def ws_delete_category(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    store = _store(hass, connection, msg)
+    if store is None:
+        return
+    try:
+        await store.async_delete_category(msg["category_id"])
+    except KeyError:
+        connection.send_error(msg["id"], "not_found", "Categoria non trovata")
+        return
+    except ValueError:
+        connection.send_error(msg["id"], "invalid_format", "Questa categoria non si può eliminare: raccoglie gli alimenti senza categoria")
+        return
+    connection.send_result(msg["id"], {})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "shared_diet/set_food_category",
+        vol.Required("food"): _capped(NON_EMPTY, MAX_ROW_LEN),
+        vol.Required("category_id"): vol.Any(None, str),  # None: back to the automatic category
+    }
+)
+@websocket_api.async_response
+async def ws_set_food_category(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    store = _store(hass, connection, msg)
+    if store is None:
+        return
+    try:
+        await store.async_set_food_category(msg["food"], msg["category_id"])
+    except KeyError:
+        connection.send_error(msg["id"], "not_found", "Categoria non trovata")
+        return
+    except ValueError:
+        connection.send_error(msg["id"], "invalid_format", "Alimento non valido")
+        return
+    except LimitError:
+        connection.send_error(msg["id"], "invalid_format", "Troppe categorie personalizzate per gli alimenti")
+        return
+    connection.send_result(msg["id"], {})
+
+
+@websocket_api.websocket_command({vol.Required("type"): "shared_diet/get_category_order"})
+@websocket_api.async_response
+async def ws_get_category_order(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    store = _store(hass, connection, msg)
+    if store is None:
+        return
+    connection.send_result(msg["id"], {"order": store.category_order(connection.user.id)})
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "shared_diet/set_category_order",
+        vol.Required("order"): _capped([str], MAX_KEYS),
+    }
+)
+@websocket_api.async_response
+async def ws_set_category_order(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    store = _store(hass, connection, msg)
+    if store is None:
+        return
+    try:
+        order = await store.async_set_category_order(connection.user.id, msg["order"])
+    except KeyError:
+        connection.send_error(msg["id"], "invalid_format", "Categoria sconosciuta")
+        return
+    connection.send_result(msg["id"], {"order": order})
+
+
 COMMANDS = (
     ws_subscribe,
     ws_save_profile,
@@ -368,6 +498,12 @@ COMMANDS = (
     ws_save_recipe,
     ws_delete_recipe,
     ws_shopping,
+    ws_create_category,
+    ws_rename_category,
+    ws_delete_category,
+    ws_set_food_category,
+    ws_get_category_order,
+    ws_set_category_order,
 )
 
 

@@ -2,6 +2,12 @@ from datetime import date
 
 from custom_components.shared_diet.model import expand_item, format_item, fold_name, resolve_meal, shopping_items
 
+
+def texts(*args):
+    """Row texts only: these tests are about aggregation, not categories."""
+    return [row["text"] for row in shopping_items(*args)]
+
+
 MON = date(2026, 11, 9)  # lunedi
 
 RECIPES = {"r1": {"id": "r1", "name": "Pancake", "note": "Mescolare", "rev": 1, "ingredients": [
@@ -93,7 +99,7 @@ def test_expansion_does_not_copy_unchosen_alternatives():
 def test_shopping_expands_recipe_and_sums_with_plain_food():
     # lunedi: riga 1 = Pancake (override Farina 40), riga 2 = Farina 20 g semplice
     p = profile(mon=[lunch({"recipe": "r1"}, item("Farina", 20.0))], recipe_qty={"r1": {"a1": 40.0}})
-    items = shopping_items([p], MON, MON, RECIPES)
+    items = texts([p], MON, MON, RECIPES)
     assert "Farina - 60 g" in items
     assert "Latte - 100 ml" in items
     assert not any(s.startswith("Pancake") for s in items)
@@ -101,7 +107,7 @@ def test_shopping_expands_recipe_and_sums_with_plain_food():
 
 def test_shopping_uses_chosen_alt_from_meal_choice():
     p = profile(mon=[recipe_meal("l")], choices={"l": {"option": 0, "lines": {}, "recipes": {"r1": {"i2": "a3"}}}})
-    items = shopping_items([p], MON, MON, RECIPES)
+    items = texts([p], MON, MON, RECIPES)
     assert "Soia - 120 ml" in items
     assert not any(s.startswith("Latte") for s in items)
 
@@ -109,7 +115,7 @@ def test_shopping_uses_chosen_alt_from_meal_choice():
 def test_shopping_same_recipe_two_meals_different_choices_sums():
     p = profile(mon=[recipe_meal("a"), recipe_meal("b")],
                 choices={"b": {"option": 0, "lines": {}, "recipes": {"r1": {"i2": "a3"}}}})
-    items = shopping_items([p], MON, MON, RECIPES)
+    items = texts([p], MON, MON, RECIPES)
     assert "Latte - 100 ml" in items and "Soia - 120 ml" in items
     assert "Farina - 120 g" in items
 
@@ -124,13 +130,13 @@ def test_shopping_recipe_as_unchosen_alternative_is_ignored():
     # riga con alts [Yogurt 150 g, {recipe r1}], scelta default alt 0
     p = profile(mon=[{"id": "l", "name": "l", "time": "13:00",
                       "options": [[{"alts": [item("Yogurt", 150.0), {"recipe": "r1"}]}]]}])
-    items = shopping_items([p], MON, MON, RECIPES)
+    items = texts([p], MON, MON, RECIPES)
     assert "Yogurt - 150 g" in items and not any(i.startswith("Farina") for i in items)
 
 
 def test_shopping_missing_recipe_skipped():
     p_with_missing_ref = profile(mon=[lunch({"recipe": "nope"})])
-    assert shopping_items([p_with_missing_ref], MON, MON, RECIPES) == []
+    assert texts([p_with_missing_ref], MON, MON, RECIPES) == []
 
 
 def test_fold_name():

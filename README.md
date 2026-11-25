@@ -22,7 +22,7 @@ Dopo l'installazione compare **Dieta** nella barra laterale. Le schede sono:
 - **Date**: crea un'eccezione per una data specifica (copia il giorno della settimana, mantenendo le scelte), modificala o eliminala.
 - **Scelte**: per un intervallo di date, scegli l'opzione e l'alternativa di ogni pasto. Il predefinito vale per tutte le date; "Ritocca per questa data" cambia solo quel giorno. Le ricette del percorso scelto mostrano anche le tendine delle loro alternative ingrediente (vedi sotto).
 - **Ricette**: il ricettario condiviso, da cui si aggiungono ricette ai pasti (vedi sotto).
-- **Spesa**: sceglie intervallo di date e profili, poi aggiunge gli alimenti alla lista To-do selezionata (quantità sommate per alimento e unità).
+- **Spesa**: sceglie intervallo di date e profili, poi aggiunge gli alimenti alla lista To-do selezionata (quantità sommate per alimento e unità). L'anteprima è raggruppata per categoria (reparto): ogni alimento riceve una categoria automatica dal nome, modificabile dal menu accanto alla riga (vale per tutti). Nella sezione «Categorie» si aggiungono, rinominano ed eliminano le categorie della casa («Altro» non si elimina) e ciascun utente le ordina col proprio percorso nel supermercato; la lista To-do viene riempita in quell'ordine.
 - **Profili**: rinomina il profilo, collega una persona, configura il promemoria (minuti prima del pasto e servizio di notifica). Solo gli amministratori eliminano profili.
 
 Ogni salvataggio invia l'intero profilo. Se un altro utente ha salvato nel frattempo, il pannello mostra "Modificato da un altro utente, dati ricaricati" e ricarica i dati aggiornati.
