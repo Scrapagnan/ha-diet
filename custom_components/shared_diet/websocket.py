@@ -16,7 +16,7 @@ from homeassistant.helpers import config_validation as cv
 
 from .const import DOMAIN
 from .model import fold_name, shopping_items
-from .store import ConflictError, DietStore, DuplicateNameError, InUseError, LimitError, UnknownRecipeError
+from .store import MAX_PROFILES, ConflictError, DietStore, DuplicateNameError, InUseError, LimitError, UnknownRecipeError
 
 MAX_SPAN_DAYS = 62
 # Cardinality caps: resolving a meal costs lines x recipe ingredients, so every list needs a bound.
@@ -143,6 +143,8 @@ MEAL = {
     vol.Required("name"): NON_EMPTY,
     vol.Required("time"): vol.Any(None, TIME),
     vol.Optional("remind"): bool,  # False: no reminder for this meal; absent means on
+    # Profiles this meal is eaten with: None/absent = everyone, [] = nobody. Ids are not checked (profiles change in parallel).
+    vol.Optional("shared_with"): vol.Any(None, _capped([NON_EMPTY], MAX_PROFILES)),
     vol.Required("options"): vol.All([_capped([LINE], MAX_LINES)], vol.Length(min=1, max=MAX_OPTIONS)),
 }
 DAY = _capped([MEAL], MAX_MEALS)

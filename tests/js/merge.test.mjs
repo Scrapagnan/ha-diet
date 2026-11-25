@@ -87,4 +87,19 @@ const base = () => ({
   assert.deepStrictEqual(overlaps, ["recipe_qty.r1"]);
 }
 
+// shared_with is part of the meal: mine changes it on week.0, theirs edits week.1 -> both kept; same day on both -> theirs, listed.
+{
+  const b = base();
+  const mine = base(); mine.week[0] = [{ ...meal("pranzo"), shared_with: [] }];
+  const theirs = base(); theirs.week[1] = [meal("cena")]; theirs.rev = 4;
+  let { merged, overlaps } = merge(b, mine, theirs);
+  assert.deepStrictEqual(merged.week[0][0].shared_with, []);
+  assert.deepStrictEqual(merged.week[1], theirs.week[1]);
+  assert.deepStrictEqual(overlaps, []);
+  const theirs2 = base(); theirs2.week[0] = [{ ...meal("pranzo"), shared_with: ["p2"] }];
+  ({ merged, overlaps } = merge(b, mine, theirs2));
+  assert.deepStrictEqual(merged.week[0][0].shared_with, ["p2"]);
+  assert.deepStrictEqual(overlaps, ["week.0"]);
+}
+
 console.log("merge.test.mjs: all assertions passed");

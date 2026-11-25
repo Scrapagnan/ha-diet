@@ -136,6 +136,15 @@ class DietStore:
     async def async_delete_profile(self, profile_id: str) -> None:
         if self._profiles.pop(profile_id, None) is None:
             return
+        for profile in self._profiles.values():
+            touched = False
+            for meals in [*profile["week"].values(), *profile["exceptions"].values()]:
+                for meal in meals:
+                    if profile_id in (meal.get("shared_with") or []):
+                        meal["shared_with"] = [pid for pid in meal["shared_with"] if pid != profile_id]
+                        touched = True
+            if touched:
+                profile["rev"] += 1
         await self._async_commit()
 
     async def async_create_recipe(self, name: str) -> dict:
