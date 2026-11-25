@@ -93,6 +93,7 @@ details p { white-space: pre-line; margin: 6px 0; }
 .shoprow > label { flex: 1 1 auto; }
 .sqty { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
 .sqty input { width: 80px; }
+.sqty .unit { min-width: 2.5em; }
 .lgroup { margin-top: 24px; padding-top: 12px; border-top: 2px solid var(--divider-color, #e0e0e0); }
 .lgroup h3 { margin: 0 0 8px; }
 .page-head .chips .chip { flex: 0 0 auto; padding: 6px 12px; }
@@ -1615,7 +1616,7 @@ class SharedDietPanel extends HTMLElement {
         `<div class="check shoprow"><label class="check"><input type="checkbox" role="switch" class="switch" data-ch="sitem" data-i="${i}"${
           this._shop.skip.has(r.text) ? "" : " checked"}> ${esc(r.qty === null ? r.text : r.food)}</label>
           ${r.qty === null ? "" : `<span class="sqty"><input type="number" min="0" max="${MAX_SHOP_QTY}" step="any" inputmode="decimal" data-ch="sqty" data-i="${i}"
-            value="${esc(this._shop.qty.get(r.text) ?? r.qty)}" aria-label="Quantità di ${esc(r.food)}"> ${esc(r.unit)}</span>`}
+            value="${esc(this._shop.qty.get(r.text) ?? r.qty)}" aria-label="Quantità di ${esc(r.food)}"><span class="unit">${esc(r.unit)}</span></span>`}
           <select data-ch="scat" data-i="${i}" aria-label="Categoria di ${esc(r.food)}">${catOpts(this._manualCat(r))}</select></div>`).join("")}` : "";
     }).join("");
     const items = rows === null ? `<p class="muted">Caricamento…</p>`
