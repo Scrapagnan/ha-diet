@@ -246,5 +246,5 @@ async def test_shopping_expands_recipe_ingredients(hass, client):
         profile_ids=None,
         add=True,
     )
-    assert [r["text"] for r in resp["result"]["items"]] == ["Uova - 1 pz", "Farina - 60 g"]  # latticini_uova first
+    assert [r["text"] for r in resp["result"]["items"]] == ["Uova - 1 pz", "Farina - 60 g"]  # latte_formaggi first
     assert [i["summary"] for i in hass.data["shared_diet"].shopping] == ["Uova - 1 pz", "Farina - 60 g"]

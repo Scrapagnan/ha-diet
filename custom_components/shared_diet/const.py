@@ -4,23 +4,27 @@ STORAGE_VERSION = 1
 PANEL_URL = "shared-diet"
 VERSION = "0.3.6"
 
-# Shopping categories: the house list starts with these (fixed ids). "altro" catches every unmatched food and cannot be deleted.
+# Shopping categories: the house list starts with these (fixed ids), in this order. "altro" catches every unmatched food
+# and cannot be deleted.
 FALLBACK_CATEGORY = "altro"
 DEFAULT_CATEGORIES = [
-    {"id": "frutta_verdura", "name": "Frutta e verdura"},
-    {"id": "carne", "name": "Carne"},
-    {"id": "pesce", "name": "Pesce"},
-    {"id": "latticini_uova", "name": "Latticini e uova"},
-    {"id": "pane_forno", "name": "Pane e forno"},
+    {"id": "frutta_verdura", "name": "Frutta e Verdura"},
+    {"id": "panetteria", "name": "Panetteria"},
+    {"id": "latte_formaggi", "name": "Latte e Formaggi"},
+    {"id": "carne_pesce", "name": "Carne e Pesce"},
+    {"id": "ingredienti_spezie", "name": "Ingredienti e Spezie"},
+    {"id": "pronti_surgelati", "name": "Piatti pronti e Surgelati"},
     {"id": "pasta_cereali", "name": "Pasta, riso e cereali"},
-    {"id": "dispensa", "name": "Dispensa"},
-    {"id": "condimenti", "name": "Condimenti e spezie"},
-    {"id": "surgelati", "name": "Surgelati"},
+    {"id": "snack_dolci", "name": "Snack e Dolci"},
     {"id": "bevande", "name": "Bevande"},
+    {"id": "casa", "name": "Casa"},
+    {"id": "bellezza_igiene", "name": "Bellezza e Igiene"},
+    {"id": "animali", "name": "Animali"},
+    {"id": "fai_da_te", "name": "Fai da te e Giardino"},
     {"id": FALLBACK_CATEGORY, "name": "Altro"},
 ]
 
-# Comma-separated keywords in fold_name form (lowercase, no accents). Multi-word keywords are fine: the longest match wins.
+# Comma-separated keywords in fold_name form (lowercase, no accents). Multi-word keywords are fine.
 _KEYWORDS = {
     "frutta_verdura": (
         "frutta, verdura, verdure, mela, mele, pera, pere, banana, banane, arancia, arance, mandarino, mandarini, limone, "
@@ -31,44 +35,62 @@ _KEYWORDS = {
         "sedano, cetriolo, cetrioli, zucca, asparagi, carciofi, funghi, champignon, porro, radicchio, fagiolini, "
         "basilico, prezzemolo, rosmarino, salvia, menta"
     ),
-    "carne": (
-        "carne, pollo, tacchino, manzo, vitello, maiale, agnello, coniglio, bresaola, prosciutto, speck, salame, "
-        "mortadella, salsiccia, salsicce, wurstel, hamburger, macinato, fesa, arrosto, bistecca, lonza, pancetta, cotoletta"
+    "panetteria": (
+        "pane, panino, panini, piadina, piadine, fette biscottate, grissini, crackers, cracker, focaccia, pizza, toast, "
+        "pan carre, gallette, brioche, cornetto, cornetti, pangrattato, taralli"
     ),
-    "pesce": (
-        "pesce, salmone, tonno, merluzzo, nasello, orata, branzino, spigola, sgombro, alici, acciughe, sardine, gamberi, "
-        "gamberetti, calamari, polpo, seppie, cozze, vongole, platessa, sogliola, trota, baccala"
-    ),
-    "latticini_uova": (
+    "latte_formaggi": (
         "latte, yogurt, formaggio, formaggi, mozzarella, ricotta, parmigiano, grana, pecorino, stracchino, crescenza, "
         "fiocchi di latte, burro, panna, mascarpone, scamorza, provola, fontina, gorgonzola, feta, skyr, kefir, "
         "uovo, uova, albume, albumi"
     ),
-    "pane_forno": (
-        "pane, panino, panini, piadina, piadine, fette biscottate, grissini, crackers, cracker, focaccia, pizza, toast, "
-        "pan carre, gallette, brioche, cornetto"
+    "carne_pesce": (
+        "carne, pollo, tacchino, manzo, vitello, maiale, agnello, coniglio, bresaola, prosciutto, speck, salame, "
+        "mortadella, salsiccia, salsicce, wurstel, hamburger, macinato, fesa, arrosto, bistecca, lonza, pancetta, cotoletta, "
+        "pesce, salmone, tonno, merluzzo, nasello, orata, branzino, spigola, sgombro, alici, acciughe, sardine, gamberi, "
+        "gamberetti, calamari, polpo, seppie, cozze, vongole, platessa, sogliola, trota, baccala"
+    ),
+    "ingredienti_spezie": (
+        "olio, olio evo, aceto, sale, pepe, spezie, origano, curcuma, paprika, peperoncino, cannella, noce moscata, "
+        "zenzero, curry, senape, maionese, ketchup, salsa di soia, dado, brodo, lievito, zucchero, miele, "
+        "legumi, fagioli, ceci, lenticchie, piselli, fave, lupini, passata, pelati, polpa di pomodoro, tonno in scatola, "
+        "semi, proteine, whey"
+    ),
+    # "pronto"/"surgelato" decide wherever they are in the name: see QUALIFIER_CATEGORIES.
+    "pronti_surgelati": (
+        "surgelati, surgelato, surgelata, surgelate, gelato, gelati, bastoncini di pesce, pronto, pronta, pronti, pronte, "
+        "piatto pronto, sugo pronto, zuppa, minestrone"
     ),
     "pasta_cereali": (
         "pasta, spaghetti, penne, fusilli, rigatoni, tagliatelle, lasagne, gnocchi, riso, farro, orzo, quinoa, couscous, "
         "avena, fiocchi d avena, cereali, muesli, corn flakes, farina, polenta, miglio, grano saraceno, bulgur"
     ),
-    "dispensa": (
-        "legumi, fagioli, ceci, lenticchie, piselli, fave, lupini, passata, pelati, polpa di pomodoro, tonno in scatola, "
-        "zucchero, miele, marmellata, confettura, cioccolato, cacao, biscotti, frutta secca, noci, mandorle, nocciole, "
-        "pistacchi, arachidi, anacardi, semi, uvetta, datteri, burro di arachidi, crema spalmabile, caffe, te, tisana, "
-        "proteine, whey"
+    "snack_dolci": (
+        "biscotti, cioccolato, cioccolata, cacao, marmellata, confettura, crema spalmabile, burro di arachidi, merendine, "
+        "merendina, patatine, snack, caramelle, barretta, barrette, wafer, torta, crostata, frutta secca, noci, mandorle, "
+        "nocciole, pistacchi, arachidi, anacardi, uvetta, datteri, popcorn"
     ),
-    "condimenti": (
-        "olio, olio evo, aceto, sale, pepe, spezie, origano, curcuma, paprika, peperoncino, cannella, noce moscata, "
-        "zenzero, curry, senape, maionese, ketchup, salsa di soia, dado, brodo, lievito"
-    ),
-    "surgelati": "surgelati, surgelato, surgelata, surgelate, gelato, bastoncini di pesce",
     "bevande": (
-        "acqua, succo, succhi, spremuta, bibita, aranciata, vino, birra, latte di soia, latte di mandorla, "
-        "latte di avena, bevanda vegetale"
+        "acqua, succo, succhi, spremuta, bibita, bibite, aranciata, cola, vino, birra, latte di soia, latte di mandorla, "
+        "latte di avena, bevanda vegetale, caffe, te, tisana, camomilla"
+    ),
+    "casa": (
+        "detersivo, detersivi, ammorbidente, candeggina, sgrassatore, anticalcare, spugna, spugne, carta igienica, "
+        "carta cucina, carta forno, alluminio, pellicola, sacchetti, sacchi, tovaglioli, scottex, piatti di carta, "
+        "bicchieri di plastica, pastiglie lavastoviglie"
+    ),
+    "bellezza_igiene": (
+        "shampoo, balsamo, bagnoschiuma, docciaschiuma, sapone, dentifricio, spazzolino, collutorio, deodorante, "
+        "crema viso, crema corpo, crema mani, assorbenti, rasoio, lamette, cotone, cotton fioc, cerotti, salviette, "
+        "fazzoletti, struccante, profumo"
+    ),
+    "animali": "crocchette, scatolette, lettiera, cane, cani, gatto, gatti, croccantini, antiparassitario",
+    "fai_da_te": (
+        "lampadina, lampadine, pile, batterie, viti, chiodi, colla, nastro adesivo, vernice, pennello, terriccio, "
+        "concime, fertilizzante, vaso, vasi, piante, fiori, attrezzi"
     ),
 }
-# A keyword of these categories decides wherever it is in the name ("Spinaci surgelati" -> surgelati).
-QUALIFIER_CATEGORIES = {"surgelati"}
+# A keyword of these categories decides wherever it is in the name ("Spinaci surgelati", "Insalata pronta").
+QUALIFIER_CATEGORIES = {"pronti_surgelati"}
 # Keyword -> default category id, matched as whole words on the folded food name (see model.category_for).
 FOOD_KEYWORDS = {kw.strip(): cid for cid, words in _KEYWORDS.items() for kw in words.split(",")}

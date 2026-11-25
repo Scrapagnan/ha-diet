@@ -244,7 +244,7 @@ async def test_shopping_preview_and_exclude(hass, client):
     base = {"start": MONDAY.isoformat(), "end": MONDAY.isoformat(), "profile_ids": None}
 
     resp = await call(client, "shopping", **base)  # preview only
-    assert [r["text"] for r in resp["result"]["items"]] == ["Pasta - 80 g", "Olio - 10 ml"]  # category order
+    assert [r["text"] for r in resp["result"]["items"]] == ["Olio - 10 ml", "Pasta - 80 g"]  # category order: ingredienti before pasta
     assert client.store.shopping == []
 
     resp = await call(client, "shopping", **base, add=True, exclude=["Olio - 10 ml"])

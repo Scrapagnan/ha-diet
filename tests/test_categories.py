@@ -19,17 +19,22 @@ CATS = DEFAULT_CATEGORIES
 @pytest.mark.parametrize(
     ("food", "expected"),
     [
-        ("Petto di pollo", "carne"),
+        ("Petto di pollo", "carne_pesce"),
         ("  MELE golden ", "frutta_verdura"),
-        ("Caffè", "dispensa"),  # accents folded
+        ("Caffè", "bevande"),  # accents folded
         ("Fiocchi d'avena", "pasta_cereali"),  # punctuation ignored
         ("Latte di soia", "bevande"),  # same start as "latte": the longest wins
-        ("Yogurt alla fragola", "latticini_uova"),  # the first food in the name wins
-        ("Olio di semi", "condimenti"),
-        ("Gelato al cioccolato", "surgelati"),
-        ("Spinaci surgelati", "surgelati"),  # qualifier wins wherever it is
-        ("Latte", "latticini_uova"),
-        ("Verdure surgelate", "surgelati"),
+        ("Yogurt alla fragola", "latte_formaggi"),  # the first food in the name wins
+        ("Olio di semi", "ingredienti_spezie"),
+        ("Gelato al cioccolato", "pronti_surgelati"),
+        ("Spinaci surgelati", "pronti_surgelati"),  # qualifier wins wherever it is
+        ("Latte", "latte_formaggi"),
+        ("Verdure surgelate", "pronti_surgelati"),
+        ("Shampoo antiforfora", "bellezza_igiene"),
+        ("Crocchette gatto", "animali"),
+        ("Lampadine LED", "fai_da_te"),
+        ("Insalata pronta", "pronti_surgelati"),
+        ("Biscotti al cacao", "snack_dolci"),
         ("Pollame", "altro"),  # whole words only: "pollo" is not in "pollame"
         ("Qualcosa", "altro"),
     ],
@@ -39,10 +44,10 @@ def test_category_for_keywords(food, expected):
 
 
 def test_category_for_override_and_missing_categories():
-    assert category_for(" pollo ", CATS, {"pollo": "pesce"}) == "pesce"  # keyed by fold_name
-    without_carne = [c for c in CATS if c["id"] != "carne"]
-    assert category_for("Pollo", without_carne, {}) == "altro"  # guessed category deleted
-    assert category_for("Pollo", CATS, {"pollo": "gone"}) == "carne"  # stale override ignored
+    assert category_for(" pollo ", CATS, {"pollo": "bevande"}) == "bevande"  # keyed by fold_name
+    without_meat = [c for c in CATS if c["id"] != "carne_pesce"]
+    assert category_for("Pollo", without_meat, {}) == "altro"  # guessed category deleted
+    assert category_for("Pollo", CATS, {"pollo": "gone"}) == "carne_pesce"  # stale override ignored
 
 
 @pytest.mark.parametrize(
@@ -70,10 +75,10 @@ def test_shopping_rows_carry_food_and_category():
     week = {str(d): [] for d in range(7)}
     week["0"] = [meal("l", "13:00", [[{"alts": [item("Pollo", 100.0)]}, {"alts": [item("Sale", None, "", "q.b.")]}]])]
     p = {"week": week, "exceptions": {}, "choices": {"defaults": {}, "dates": {}}}
-    rows = shopping_items([p], MONDAY, MONDAY, {}, CATS, {"sale": "dispensa"})
+    rows = shopping_items([p], MONDAY, MONDAY, {}, CATS, {"sale": "snack_dolci"})
     assert rows == [
-        {"text": "Pollo - 100 g", "food": "Pollo", "category": "carne", "manual": False},
-        {"text": "Sale (q.b.)", "food": "Sale", "category": "dispensa", "manual": True},
+        {"text": "Pollo - 100 g", "food": "Pollo", "category": "carne_pesce", "manual": False},
+        {"text": "Sale (q.b.)", "food": "Sale", "category": "snack_dolci", "manual": True},
     ]
 
 
@@ -81,8 +86,8 @@ def test_shopping_manual_flag_uses_server_folding():
     week = {str(d): [] for d in range(7)}
     week["0"] = [meal("l", "13:00", [[{"alts": [item("Weißwurst", 100.0)]}]])]
     p = {"week": week, "exceptions": {}, "choices": {"defaults": {}, "dates": {}}}
-    [row] = shopping_items([p], MONDAY, MONDAY, {}, CATS, {"weisswurst": "carne"})  # casefold: ß -> ss
-    assert row["category"] == "carne" and row["manual"] is True
+    [row] = shopping_items([p], MONDAY, MONDAY, {}, CATS, {"weisswurst": "carne_pesce"})  # casefold: ß -> ss
+    assert row["category"] == "carne_pesce" and row["manual"] is True
 
 
 # --- store -----------------------------------------------------------------------------------------------------
@@ -108,8 +113,8 @@ async def test_category_crud_persists(hass):
     with pytest.raises(DuplicateNameError):
         await s.async_rename_category(new["id"], "varie")
     await s.async_set_food_category("Sapone", new["id"])
-    await s.async_set_food_category("Pollo", "pesce")
-    await s.async_set_category_order("u1", [new["id"], "carne"])
+    await s.async_set_food_category("Pollo", "bevande")
+    await s.async_set_category_order("u1", [new["id"], "carne_pesce"])
     with pytest.raises(ValueError):
         await s.async_delete_category("altro")
     with pytest.raises(KeyError):
@@ -123,8 +128,8 @@ async def test_category_crud_persists(hass):
     snap = s2.snapshot()
     assert new["id"] not in [c["id"] for c in snap["categories"]]
     assert next(c["name"] for c in snap["categories"] if c["id"] == "altro") == "Varie"
-    assert snap["food_categories"] == {"pollo": "pesce"}
-    assert s2.category_order("u1")[0] == "carne"
+    assert snap["food_categories"] == {"pollo": "bevande"}
+    assert s2.category_order("u1")[0] == "carne_pesce"
 
     await s2.async_set_food_category(" POLLO ", None)  # back to automatic
     assert s2.snapshot()["food_categories"] == {}
@@ -138,7 +143,7 @@ async def test_category_limits(hass):
     with pytest.raises(LimitError):
         await s.async_create_category("Troppe")
     with pytest.raises(KeyError):
-        await s.async_set_category_order("u1", ["carne", "nope"])
+        await s.async_set_category_order("u1", ["carne_pesce", "nope"])
 
 
 async def test_order_change_does_not_push(hass):
@@ -146,7 +151,7 @@ async def test_order_change_does_not_push(hass):
     await s.async_load()
     calls = []
     s.async_add_listener(lambda: calls.append(1))
-    assert (await s.async_set_category_order("u1", ["carne", "carne"]))[:2] == ["carne", "frutta_verdura"]
+    assert (await s.async_set_category_order("u1", ["carne_pesce", "carne_pesce"]))[:2] == ["carne_pesce", "frutta_verdura"]
     assert calls == []
 
 
@@ -161,8 +166,8 @@ async def test_two_users_see_their_own_order(hass, hass_ws_client, setup_entry):
         meal("l", "12:00", [[{"alts": [item("Pasta", 80.0)]}, {"alts": [item("Pollo", 100.0)]}, {"alts": [item("Mele", 2.0, "pz")]}]])
     ]
     assert (await call(anna, "save_profile", profile=profile))["success"]
-    resp = await call(anna, "set_category_order", order=["pasta_cereali", "carne"])
-    assert resp["result"]["order"][:3] == ["pasta_cereali", "carne", "frutta_verdura"]
+    resp = await call(anna, "set_category_order", order=["pasta_cereali", "carne_pesce"])
+    assert resp["result"]["order"][:3] == ["pasta_cereali", "carne_pesce", "frutta_verdura"]
 
     base = {"start": MONDAY.isoformat(), "end": MONDAY.isoformat(), "profile_ids": None}
     texts = lambda resp: [r["text"] for r in resp["result"]["items"]]  # noqa: E731
@@ -188,9 +193,9 @@ async def test_two_users_see_their_own_order(hass, hass_ws_client, setup_entry):
 
 async def test_categorize_todo_texts(hass, hass_ws_client, setup_entry):  # noqa: F811
     c = await _user_client(hass, hass_ws_client)
-    assert (await call(c, "set_food_category", food="Sale", category_id="dispensa"))["success"]
+    assert (await call(c, "set_food_category", food="Sale", category_id="snack_dolci"))["success"]
     resp = await call(c, "categorize", texts=["Petto di pollo - 840 g", "Sale (q.b.)", "Detersivo"])
-    assert resp["result"]["categories"] == ["carne", "dispensa", "altro"]
+    assert resp["result"]["categories"] == ["carne_pesce", "snack_dolci", "casa"]
 
 
 async def test_category_command_errors(hass, hass_ws_client, setup_entry):  # noqa: F811
@@ -200,22 +205,22 @@ async def test_category_command_errors(hass, hass_ws_client, setup_entry):  # no
     assert (await call(c, "rename_category", category_id="nope", name="X"))["error"]["code"] == "not_found"
     assert (await call(c, "create_category", name="  "))["error"]["code"] == "invalid_format"
     assert (await call(c, "create_category", name="x" * 41))["error"]["code"] == "invalid_format"
-    assert (await call(c, "create_category", name="carne"))["error"]["code"] == "duplicate_name"
-    assert (await call(c, "rename_category", category_id="pesce", name="CARNE"))["error"]["code"] == "duplicate_name"
+    assert (await call(c, "create_category", name="carne e pesce"))["error"]["code"] == "duplicate_name"
+    assert (await call(c, "rename_category", category_id="bevande", name="CARNE E PESCE"))["error"]["code"] == "duplicate_name"
     assert (await call(c, "set_food_category", food="Pane", category_id="nope"))["error"]["code"] == "not_found"
     assert (await call(c, "set_category_order", order=["nope"]))["error"]["code"] == "invalid_format"
     assert (await call(c, "rename_category", category_id="altro", name="Varie"))["success"]
-    assert (await call(c, "delete_category", category_id="carne"))["success"]
+    assert (await call(c, "delete_category", category_id="carne_pesce"))["success"]
     order = (await call(c, "get_category_order"))["result"]["order"]
-    assert "carne" not in order and order[-1] == "altro"
+    assert "carne_pesce" not in order and order[-1] == "altro"
 
 
 async def test_removed_user_order_is_dropped(hass, hass_storage):
     s = DietStore(hass)
     await s.async_load()
-    await s.async_set_category_order("gone", ["carne"])
-    await s.async_set_category_order("kept", ["pesce"])
-    await s.async_set_category_order("removed", ["pesce"])
+    await s.async_set_category_order("gone", ["carne_pesce"])
+    await s.async_set_category_order("kept", ["bevande"])
+    await s.async_set_category_order("removed", ["bevande"])
     await s.async_delete_user_profile("removed")  # user without a profile: the order still goes
     await s.async_sync_users({"kept": "Kept"}, {})
-    assert hass_storage[STORAGE_KEY]["data"]["category_order"] == {"kept": ["pesce"]}
+    assert hass_storage[STORAGE_KEY]["data"]["category_order"] == {"kept": ["bevande"]}
