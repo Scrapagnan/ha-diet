@@ -585,7 +585,9 @@ const RECIPES = {
   p._shop.skip.add("Pasta - 80 g");
   html2 = p._body();
   assert.match(html2, /aria-checked="mixed" data-act="shopall"/);
-  assert.match(html2, /data-ch="sitem" data-i="1">/);
+  assert.match(html2, /data-ch="sitem" data-i="1" aria-label="Pasta">/);
+  // Each food is a card: a label around its checkbox (tap = tick), name first, then quantity and category.
+  assert.match(html2, /<label class="scard"><input type="checkbox" class="spick" data-ch="sitem" data-i="1"[^>]*><span class="sname">Pasta<\/span>[^]*data-ch="sqty"[^]*data-ch="scat"[^]*<\/label>/);
   p._onClick({ target: { closest: () => ({ dataset: { act: "shopall" } }) } }); // mixed -> all on
   assert.equal(p._shopAll(), "true");
   p._onClick({ target: { closest: () => ({ dataset: { act: "shopall" } }) } }); // on -> all off
