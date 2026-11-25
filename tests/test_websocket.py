@@ -261,7 +261,7 @@ async def test_shopping_edited_qty(hass, client):
     assert (await call(client, "save_profile", profile=profile))["success"]
     base = {"start": MONDAY.isoformat(), "end": MONDAY.isoformat(), "profile_ids": None}
 
-    for bad in (0, -5, "100", None, True):  # a quantity must be a number > 0
+    for bad in (0, -5, 100_001, "100", None, True):  # a quantity must be a number > 0
         resp = await call(client, "shopping", **base, add=True, qty={"Pasta - 80 g": bad})
         assert not resp["success"], bad
     assert client.store.shopping == []

@@ -40,6 +40,7 @@ MAX_DATES = 400  # exception dates and per-date choices
 MAX_KEYS = 200  # other id-keyed maps (choice defaults, recipe overrides)
 MAX_EXCLUDE = 1000  # shopping rows left out of the todo list
 MAX_ROW_LEN = 1000  # characters per excluded row
+MAX_SHOP_QTY = 100_000  # edited shopping quantity: keeps "Nome - <qty:g> unità" out of exponent notation
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}", re.ASCII)
 
 
@@ -330,7 +331,7 @@ async def ws_delete_recipe(hass: HomeAssistant, connection: websocket_api.Active
         vol.Optional("exclude", default=[]): _capped([_capped(str, MAX_ROW_LEN)], MAX_EXCLUDE),
         # Quantities edited in the panel, by row text: the row is added with this quantity instead (rows with one only).
         vol.Optional("qty", default=dict): _capped(
-            {_capped(str, MAX_ROW_LEN): vol.All(_nonnull_qty, vol.Range(min=0, min_included=False))}, MAX_EXCLUDE
+            {_capped(str, MAX_ROW_LEN): vol.All(_nonnull_qty, vol.Range(min=0, min_included=False, max=MAX_SHOP_QTY))}, MAX_EXCLUDE
         ),
     }
 )

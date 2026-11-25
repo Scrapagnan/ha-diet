@@ -24,4 +24,7 @@ assert.deepEqual(run([["Pasta - 80 g", "0"]], ["Pasta - 80 g"]), {}); // skipped
 assert.throws(() => run([["Pasta - 80 g", "0"]]), /Pasta/);
 assert.throws(() => run([["Pasta - 80 g", "-1"]]), /Pasta/);
 assert.throws(() => run([["Pasta - 80 g", "abc"]]), /Pasta/);
+assert.throws(() => run([["Pasta - 80 g", "?"]]), /Pasta/); // unparsable input (badInput)
+assert.throws(() => run([["Pasta - 80 g", "100001"]]), /Pasta/);
+assert.deepEqual(run([["Pasta - 80 g", "100000"]]), { "Pasta - 80 g": 100000 });
 console.log("shopqty ok");

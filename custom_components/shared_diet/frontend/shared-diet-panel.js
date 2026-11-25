@@ -139,6 +139,8 @@ const pad = (n) => String(n).padStart(2, "0");
 const iso = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const parseIso = (s) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
 const addDays = (s, n) => { const d = parseIso(s); d.setDate(d.getDate() + n); return iso(d); };
+const MAX_SHOP_QTY = 100000; // as the server's cap on an edited shopping quantity
+
 // Edited quantities to send with "Aggiungi alla lista": {row text: qty} for selected rows with a quantity whose field
 // was changed. An empty field keeps the computed quantity; anything else must be a number > 0.
 function shopQty(rows, edits, skip) {
@@ -147,7 +149,7 @@ function shopQty(rows, edits, skip) {
     const raw = edits.get(r.text);
     if (r.qty === null || skip.has(r.text) || raw === undefined || String(raw).trim() === "") continue;
     const n = Number(raw);
-    if (!Number.isFinite(n) || n <= 0) throw new Error(`Quantità non valida per ${r.food}`);
+    if (!Number.isFinite(n) || n <= 0 || n > MAX_SHOP_QTY) throw new Error(`Quantità non valida per ${r.food}`);
     if (n !== r.qty) out[r.text] = n;
   }
   return out;
@@ -418,6 +420,9 @@ class SharedDietPanel extends HTMLElement {
         this._shop.stale = false;
         this._render();
       }
+      // Same for a Spesa quantity field: the preview reload skipped while typing runs once focus leaves it for nothing
+      // clickable. ponytail: towards another field or control it waits for the next reload (tab switch, push, change).
+      if (this._shop.reload && !e.relatedTarget && e.target.matches?.('[data-ch="sqty"]')) this._loadShop();
     });
   }
 
@@ -567,6 +572,10 @@ class SharedDietPanel extends HTMLElement {
     }
     if (this._view === "cats" && this.shadowRoot.activeElement?.matches?.('[data-ch="catname"], #newcat')) {
       this._shop.stale = true; // rendered when the field is left (focusout) or by the next action (_run)
+      return;
+    }
+    if (this._view === "shop" && this.shadowRoot.activeElement?.matches?.('[data-ch="sqty"]')) {
+      this._shop.reload = true; // a reload re-renders the rows: never under the user's typing (see focusout)
       return;
     }
     if (this._view === "shop") this._loadShop();
@@ -916,6 +925,7 @@ class SharedDietPanel extends HTMLElement {
   async _loadShop() {
     if (!this._profiles) return; // _onData loads it once the data arrives
     const seq = ++this._shop.seq;
+    this._shop.reload = false;
     const msg = this._shopMsg();
     this._shop.preview = null;
     this._shop.failed = false;
@@ -959,6 +969,7 @@ class SharedDietPanel extends HTMLElement {
     }
     return this._run(async () => {
       await this._hass.callWS({ ...this._shopMsg(), add: true, exclude, qty });
+      this._shop.qty.clear(); // added: next time the fields start from the computed quantities
       this._view = "list";
       this._listWatch();
     }, "Aggiunti alla lista della spesa");
@@ -1285,7 +1296,7 @@ class SharedDietPanel extends HTMLElement {
       case "sqty": {
         // Kept as typed (by row text, like skip) so a re-render shows it; checked when adding. No re-render while typing.
         const r = this._shop.preview?.[Number(d.i)];
-        if (r) this._shop.qty.set(r.text, el.value);
+        if (r) this._shop.qty.set(r.text, el.validity?.badInput ? "?" : el.value); // unparsable: an error on add, not ""
         return;
       }
       case "catname": return this._renameCategory(d.cid, el);
@@ -1603,7 +1614,7 @@ class SharedDietPanel extends HTMLElement {
       return group.length ? `<h3>${esc(names[cid])}</h3>${group.map(([r, i]) =>
         `<div class="check shoprow"><label class="check"><input type="checkbox" role="switch" class="switch" data-ch="sitem" data-i="${i}"${
           this._shop.skip.has(r.text) ? "" : " checked"}> ${esc(r.qty === null ? r.text : r.food)}</label>
-          ${r.qty === null ? "" : `<span class="sqty"><input type="number" min="0" step="any" inputmode="decimal" data-ch="sqty" data-i="${i}"
+          ${r.qty === null ? "" : `<span class="sqty"><input type="number" min="0" max="${MAX_SHOP_QTY}" step="any" inputmode="decimal" data-ch="sqty" data-i="${i}"
             value="${esc(this._shop.qty.get(r.text) ?? r.qty)}" aria-label="Quantità di ${esc(r.food)}"> ${esc(r.unit)}</span>`}
           <select data-ch="scat" data-i="${i}" aria-label="Categoria di ${esc(r.food)}">${catOpts(this._manualCat(r))}</select></div>`).join("")}` : "";
     }).join("");
