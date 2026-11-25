@@ -176,3 +176,14 @@ async def test_category_command_errors(hass, hass_ws_client, setup_entry):  # no
     assert (await call(c, "delete_category", category_id="carne"))["success"]
     order = (await call(c, "get_category_order"))["result"]["order"]
     assert "carne" not in order and order[-1] == "altro"
+
+
+async def test_removed_user_order_is_dropped(hass, hass_storage):
+    s = DietStore(hass)
+    await s.async_load()
+    await s.async_set_category_order("gone", ["carne"])
+    await s.async_set_category_order("kept", ["pesce"])
+    await s.async_set_category_order("removed", ["pesce"])
+    await s.async_delete_user_profile("removed")  # user without a profile: the order still goes
+    await s.async_sync_users({"kept": "Kept"}, {})
+    assert hass_storage[STORAGE_KEY]["data"]["category_order"] == {"kept": ["pesce"]}

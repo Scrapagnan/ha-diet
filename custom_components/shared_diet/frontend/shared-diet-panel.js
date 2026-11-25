@@ -824,16 +824,26 @@ class SharedDietPanel extends HTMLElement {
     const i = order.indexOf(id), j = i + step;
     if (i < 0 || j < 0 || j >= order.length) return;
     [order[i], order[j]] = [order[j], order[i]];
+    const before = this._shop.order;
     this._shop.order = order; // shown at once; the preview regroups by it on render
     return this._run(async () => {
-      this._shop.order = (await this._hass.callWS({ type: "shared_diet/set_category_order", order })).order;
+      try {
+        this._shop.order = (await this._hass.callWS({ type: "shared_diet/set_category_order", order })).order;
+      } catch (err) {
+        this._shop.order = before; // not saved: show the order the todo list will follow
+        throw err;
+      }
     });
   }
 
   _addCategory() {
     const name = this.shadowRoot.getElementById("newcat")?.value.trim();
     if (!name) return this._flash("Scrivi il nome della categoria");
-    return this._run(() => this._hass.callWS({ type: "shared_diet/create_category", name }), "Categoria aggiunta");
+    this._shop.newCat = name; // survives the re-renders; cleared only once created
+    return this._run(async () => {
+      await this._hass.callWS({ type: "shared_diet/create_category", name });
+      this._shop.newCat = "";
+    }, "Categoria aggiunta");
   }
 
   _renameCategory(id, input) {
@@ -1405,7 +1415,7 @@ class SharedDietPanel extends HTMLElement {
       <details id="cats"${open}><summary>Categorie</summary>
         <p class="muted">Ordinale come il tuo percorso nel supermercato: l'ordine vale solo per te, le categorie per tutti.</p>
         ${cats}
-        <div class="row"><input class="grow" id="newcat" maxlength="40" placeholder="Nuova categoria">
+        <div class="row"><input class="grow" id="newcat" maxlength="40" placeholder="Nuova categoria" value="${esc(this._shop.newCat ?? "")}">
           <button data-act="catadd">Aggiungi categoria</button></div>
       </details>`;
   }

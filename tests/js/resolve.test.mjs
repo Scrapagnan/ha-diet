@@ -636,6 +636,23 @@ const RECIPES = {
   await p._moveCategory("altro", -1);
   assert.deepEqual(sent.at(-1), { type: "shared_diet/set_category_order", order: ["carne", "frutta", "altro", "nuova"] });
   assert.deepEqual(plain(p._catOrder()), ["carne", "frutta", "altro", "nuova"]);
+  // A move the server refuses goes back to the saved order.
+  const okCall = p._hass.callWS;
+  let flashed = "";
+  p._flash = (m) => { flashed = m; };
+  p._hass.callWS = async () => { throw { message: "Categoria sconosciuta" }; };
+  await p._moveCategory("nuova", -1);
+  assert.deepEqual(plain(p._catOrder()), ["carne", "frutta", "altro", "nuova"]);
+  assert.equal(flashed, "Categoria sconosciuta");
+  // A refused new category keeps its typed name; a created one clears it.
+  p.shadowRoot.getElementById = (id) => (id === "newcat" ? { value: " carne " } : null);
+  await p._addCategory();
+  assert.match(p._body(), /id="newcat" maxlength="40" placeholder="Nuova categoria" value="carne"/);
+  p._hass.callWS = okCall;
+  await p._addCategory();
+  assert.match(p._body(), /placeholder="Nuova categoria" value=""/);
+  p.shadowRoot.getElementById = () => null;
+  p._flash = (m) => { throw new Error(m); };
   await p._setFoodCategory(0, "altro"); // the food name, not the row text
   assert.deepEqual(sent.at(-1), { type: "shared_diet/set_food_category", food: "Mele", category_id: "altro" });
   const before = sent.length;

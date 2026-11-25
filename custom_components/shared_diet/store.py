@@ -135,6 +135,9 @@ class DietStore:
             await self.async_delete_profile(profile_id)
         owned = {p["user_id"] for p in self._profiles.values()}
         changed = False
+        for user_id in [uid for uid in self._category_order if uid not in users]:
+            del self._category_order[user_id]
+            changed = True
         for profile in self._profiles.values():
             user_id = person_users.get(profile["person"] or "")
             if profile["user_id"] is None and user_id in users and user_id not in owned:
@@ -150,9 +153,12 @@ class DietStore:
             await self._async_commit()
 
     async def async_delete_user_profile(self, user_id: str) -> None:
-        for profile_id, profile in list(self._profiles.items()):
-            if profile["user_id"] == user_id:
-                await self.async_delete_profile(profile_id)
+        had_order = self._category_order.pop(user_id, None) is not None
+        owned = [pid for pid, p in self._profiles.items() if p["user_id"] == user_id]
+        for profile_id in owned:
+            await self.async_delete_profile(profile_id)
+        if had_order and not owned:
+            await self._async_save()
 
     async def async_save_profile(self, profile: dict) -> dict:
         current = self._profiles.get(profile["id"])
