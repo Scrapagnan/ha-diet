@@ -1083,6 +1083,8 @@ const RECIPES = {
   assert.equal(q._todoList.view, "card");
   html = p._body();
   assert.match(html, /class="lcard" data-act="litem" data-uid="2"/);
+  // Completed items follow the view too: faded cards that reopen on tap.
+  assert.match(html, /<summary>Completati \(1\)<\/summary><div class="lcards"><button class="lcard done" data-act="litem" data-uid="4" aria-label="Riapri Sale/);
   await p._toggleItem("2");
   assert.deepEqual(services.at(-1), ["todo", "update_item", { item: "2", status: "completed" }, { entity_id: "todo.spesa" }]);
   assert.match(p._body(), /Completati \(2\)/);

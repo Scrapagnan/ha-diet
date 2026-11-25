@@ -96,6 +96,8 @@ details p { white-space: pre-line; margin: 6px 0; }
 .lcards { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
 .lcard { min-height: 64px; text-align: left; white-space: normal; border-radius: 12px;
   background: var(--card-background-color, #fff); box-shadow: 0 1px 3px rgba(0, 0, 0, .2); }
+.lcard.done { opacity: 0.55; text-decoration: line-through; box-shadow: none; }
+details.lgroup .lcards { margin-top: 8px; }
 .or { font-size: 12px; font-weight: 600; text-align: center; color: var(--secondary-text-color, #727272); }
 .chips { display: flex; gap: 4px; }
 .remind button.chip { flex: 0 0 auto; padding: 6px 10px; }
@@ -1612,11 +1614,14 @@ class SharedDietPanel extends HTMLElement {
     const done = (items ?? []).filter((i) => i.status === "completed");
     const check = (i) => `<label class="check"><input type="checkbox" data-ch="litem" data-uid="${esc(i.uid)}"${
       i.status === "completed" ? " checked" : ""}> ${esc(i.summary)}</label>`;
-    const card = (i) => `<button class="lcard" data-act="litem" data-uid="${esc(i.uid)}" aria-label="Completa ${esc(i.summary)}">${esc(i.summary)}</button>`;
+    const card = (i) => i.status === "completed"
+      ? `<button class="lcard done" data-act="litem" data-uid="${esc(i.uid)}" aria-label="Riapri ${esc(i.summary)}">${esc(i.summary)}</button>`
+      : `<button class="lcard" data-act="litem" data-uid="${esc(i.uid)}" aria-label="Completa ${esc(i.summary)}">${esc(i.summary)}</button>`;
+    const listHtml = (list) => (view === "card" ? `<div class="lcards">${list.map(card).join("")}</div>` : list.map(check).join(""));
     const groups = order.map((cid) => {
       const group = open.filter((i) => catOf(i) === cid);
       if (!group.length) return "";
-      const body = view === "card" ? `<div class="lcards">${group.map(card).join("")}</div>` : group.map(check).join("");
+      const body = listHtml(group);
       return `<section class="lgroup"><h3>${esc(names[cid])} <span class="muted">${group.length}</span></h3>${body}</section>`;
     }).join("");
     const viewBtn = (v, l) => `<button class="chip${view === v ? " on" : ""}" data-act="lview" data-v="${v}" aria-pressed="${view === v}">${l}</button>`;
@@ -1624,7 +1629,7 @@ class SharedDietPanel extends HTMLElement {
       : items === null ? `<p class="muted">Caricamento…</p>`
       : !items.length ? `<p class="muted">Lista vuota.</p>`
       : (groups || `<p class="muted">Tutto preso.</p>`) +
-        (done.length ? `<details class="lgroup"><summary>Completati (${done.length})</summary>${done.map(check).join("")}</details>` : "");
+        (done.length ? `<details class="lgroup"><summary>Completati (${done.length})</summary>${listHtml(done)}</details>` : "");
     return `<div class="page-head"><h2>Lista</h2><div class="chips">${viewBtn("check", "Checkbox")}${viewBtn("card", "Card")}</div></div>
       ${body}`;
   }
