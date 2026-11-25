@@ -1,7 +1,7 @@
 /* Dieta: pannello laterale di Shared Diet. Web component vanilla, nessuna dipendenza. */
 
 const TABS = [
-  ["today", "Oggi"], ["week", "Settimana"], ["choices", "Scelte"], ["recipes", "Ricette"], ["shop", "Spesa"], ["list", "Lista"], ["profiles", "Profili"],
+  ["today", "Oggi"], ["week", "Settimana"], ["choices", "Scelte"], ["recipes", "Ricette"], ["shop", "Spesa"], ["list", "Lista"], ["cats", "Categorie"], ["profiles", "Profili"],
 ];
 const DAYS = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato", "Domenica"];
 const DAYS_SHORT = ["Lun", "Mar", "Mer", "Gio", "Ven", "Sab", "Dom"];
@@ -74,8 +74,14 @@ input, select { padding: 6px 8px; min-width: 0; max-width: 100%; border: 1px sol
 textarea { font: inherit; font-size: 16px; color: inherit; width: 100%; padding: 6px 8px; border: 1px solid var(--divider-color, #e0e0e0);
   border-radius: 6px; background: var(--card-background-color, #fff); }
 details p { white-space: pre-line; margin: 6px 0; }
-#cats { margin: 16px 0; }
-#cats summary { cursor: pointer; font-size: 16px; padding: 8px 0; }
+.catlist { margin: 8px 0; }
+/* Fixed columns: grip, name, delete. "altro" has an empty last cell, so every name field is equally wide. */
+.catrow { display: grid; grid-template-columns: 40px 1fr 40px; align-items: center; gap: 8px; margin: 6px 0;
+  border-radius: 8px; background: var(--card-background-color, #fff); }
+.catrow input { width: 100%; }
+.catrow.dragging { opacity: 0.6; box-shadow: 0 3px 10px rgba(0, 0, 0, .35); }
+.grip { cursor: grab; touch-action: none; user-select: none; font-size: 20px; }
+.grip:active { cursor: grabbing; }
 .shoprow { justify-content: space-between; flex-wrap: nowrap; }
 .shoprow label { margin: 0; min-width: 0; }
 .shoprow select { flex: 0 1 160px; }
@@ -380,11 +386,16 @@ class SharedDietPanel extends HTMLElement {
     for (const ev of ["pointerdown", "mousedown"])
       this.shadowRoot.addEventListener(ev, (e) => { if (e.target.closest(".sugg")) e.preventDefault(); });
     this.shadowRoot.addEventListener("keydown", (e) => this._suggKey(e));
+    this.shadowRoot.addEventListener("pointerdown", (e) => this._dragStart(e));
+    this.shadowRoot.addEventListener("keydown", (e) => this._gripKey(e));
     this.shadowRoot.addEventListener("focusout", (e) => {
       if (e.target.classList?.contains("food")) this._hideSugg();
       // Left a category field for nothing clickable in the panel: catch up on the pushes skipped while typing.
-      // Towards a button, the action it runs reloads instead (a render now would swallow the click).
-      if (this._shop.stale && !e.relatedTarget && e.target.matches?.('[data-ch="catname"], #newcat')) this._loadShop();
+      // Towards a button, the action it runs renders instead (a render now would swallow the click).
+      if (this._shop.stale && !e.relatedTarget && e.target.matches?.('[data-ch="catname"], #newcat')) {
+        this._shop.stale = false;
+        this._render();
+      }
     });
   }
 
@@ -529,8 +540,8 @@ class SharedDietPanel extends HTMLElement {
         return;
       }
     }
-    if (this._view === "shop" && this.shadowRoot.activeElement?.matches?.('[data-ch="catname"], #newcat')) {
-      this._shop.stale = true; // reloaded when the field is left (focusout) or by the next action (_run)
+    if (this._view === "cats" && this.shadowRoot.activeElement?.matches?.('[data-ch="catname"], #newcat')) {
+      this._shop.stale = true; // rendered when the field is left (focusout) or by the next action (_run)
       return;
     }
     if (this._view === "shop") this._loadShop();
@@ -677,8 +688,8 @@ class SharedDietPanel extends HTMLElement {
       this._flash(err?.message || "Operazione non riuscita");
     } finally {
       this._busy = false;
-      if (this._shop.stale && this._view === "shop") this._loadShop(); // renders too
-      else this._render();
+      this._shop.stale = false;
+      this._render();
     }
   }
 
@@ -792,10 +803,7 @@ class SharedDietPanel extends HTMLElement {
     this._todoList.unsub?.then((unsub) => unsub?.(), () => {});
     Object.assign(this._todoList, { entity, items: null, cats: new Map(), unsub: null });
     if (!entity) return;
-    this._hass.callWS({ type: "shared_diet/get_category_order" }).then((r) => {
-      this._shop.order = r.order;
-      if (this._view === "list" && !this._busy) this._render();
-    }, () => {});
+    this._loadOrder();
     this._todoList.unsub = this._hass.connection
       .subscribeMessage((ev) => this._onListItems(entity, ev.items), { type: "todo/item/subscribe", entity_id: entity })
       .catch((err) => {
@@ -806,6 +814,16 @@ class SharedDietPanel extends HTMLElement {
         }
         return () => {};
       });
+  }
+
+  // This user's saved category order, for the tabs that need it without a shopping preview.
+  _loadOrder() {
+    const view = this._view;
+    this._hass.callWS({ type: "shared_diet/get_category_order" }).then((r) => {
+      this._shop.order = r.order;
+      const typing = this.shadowRoot.activeElement?.matches?.('[data-ch="catname"], #newcat');
+      if (this._view === view && !this._busy && !typing) this._render();
+    }, () => {});
   }
 
   _onListItems(entity, items) {
@@ -860,7 +878,6 @@ class SharedDietPanel extends HTMLElement {
   async _loadShop() {
     if (!this._profiles) return; // _onData loads it once the data arrives
     const seq = ++this._shop.seq;
-    this._shop.stale = false;
     const msg = this._shopMsg();
     this._shop.preview = null;
     this._shop.failed = false;
@@ -910,11 +927,17 @@ class SharedDietPanel extends HTMLElement {
     return [...order, ...ids.filter((id) => !order.includes(id))];
   }
 
+  // Keyboard alternative to dragging: arrows on a focused grip.
   _moveCategory(id, step) {
     const order = this._catOrder();
     const i = order.indexOf(id), j = i + step;
     if (i < 0 || j < 0 || j >= order.length) return;
     [order[i], order[j]] = [order[j], order[i]];
+    return this._saveOrder(order, `.grip[data-cid="${id}"]`);
+  }
+
+  // `focus`: the element to focus once saved (the panel is inert, so unfocusable, while saving).
+  _saveOrder(order, focus = null) {
     const before = this._shop.order;
     this._shop.order = order; // shown at once; the preview regroups by it on render
     return this._run(async () => {
@@ -923,8 +946,48 @@ class SharedDietPanel extends HTMLElement {
       } catch (err) {
         this._shop.order = before; // not saved: show the order the todo list will follow
         throw err;
+      } finally {
+        this._focus = focus;
       }
     });
+  }
+
+  // Drag & drop with pointer events (HTML5 drag does not work on touch screens): the row follows the pointer among its
+  // siblings, and the order is saved on release.
+  _dragStart(e) {
+    const grip = e.target.closest?.(".grip");
+    if (!grip || this._busy || e.button > 0) return;
+    e.preventDefault();
+    const row = grip.closest(".catrow"), list = row.parentElement;
+    grip.setPointerCapture?.(e.pointerId);
+    row.classList.add("dragging");
+    const move = (ev) => {
+      for (const other of list.children) {
+        if (other === row) continue;
+        const b = other.getBoundingClientRect();
+        if (ev.clientY < b.top || ev.clientY > b.bottom) continue;
+        list.insertBefore(row, ev.clientY < b.top + b.height / 2 ? other : other.nextSibling);
+        return;
+      }
+    };
+    const end = () => {
+      grip.removeEventListener("pointermove", move);
+      grip.removeEventListener("pointerup", end);
+      grip.removeEventListener("pointercancel", end);
+      row.classList.remove("dragging");
+      const order = [...list.children].map((r) => r.dataset.cid);
+      if (order.join() !== this._catOrder().join()) this._saveOrder(order);
+    };
+    grip.addEventListener("pointermove", move);
+    grip.addEventListener("pointerup", end);
+    grip.addEventListener("pointercancel", end);
+  }
+
+  _gripKey(e) {
+    const grip = e.target.closest?.(".grip");
+    if (!grip || !["ArrowUp", "ArrowDown"].includes(e.key)) return;
+    e.preventDefault();
+    if (!this._busy) this._moveCategory(grip.dataset.cid, e.key === "ArrowUp" ? -1 : 1);
   }
 
   _addCategory() {
@@ -989,6 +1052,7 @@ class SharedDietPanel extends HTMLElement {
     if (d.tab) {
       this._view = d.tab;
       if (d.tab === "shop") this._loadShop();
+      if (d.tab === "cats") this._loadOrder();
       this._listWatch();
       return this._render();
     }
@@ -1060,8 +1124,6 @@ class SharedDietPanel extends HTMLElement {
         return this._render();
       }
       case "alts": this._showAlts = !this._showAlts; return this._render();
-      case "catup": return this._moveCategory(d.cid, -1);
-      case "catdown": return this._moveCategory(d.cid, 1);
       case "catdel": return this._deleteCategory(d.cid);
       case "catadd": return this._addCategory();
       case "litem": return this._toggleItem(d.uid);
@@ -1282,7 +1344,7 @@ class SharedDietPanel extends HTMLElement {
     if (!this._profiles) return `<p class="muted">Caricamento…</p>`;
     const views = {
       today: () => this._vToday(), week: () => this._vWeek(),
-      choices: () => this._vChoices(), recipes: () => this._vRecipes(), shop: () => this._vShop(), list: () => this._vList(), profiles: () => this._vProfiles(),
+      choices: () => this._vChoices(), recipes: () => this._vRecipes(), shop: () => this._vShop(), list: () => this._vList(), cats: () => this._vCats(), profiles: () => this._vProfiles(),
     };
     return `<div id="notice">${this._noticeHtml()}</div>` + views[this._view]() + this._datalists();
   }
@@ -1498,26 +1560,27 @@ class SharedDietPanel extends HTMLElement {
       : rows.length ? `<div class="check"><button class="switch" role="checkbox" aria-checked="${all}" data-act="shopall"
           aria-label="Tutti gli alimenti"></button> Tutti gli alimenti</div>${groups}`
       : `<p class="muted">Nessun alimento nell'intervallo.</p>`;
-    // Kept open across re-renders once the user opened it.
-    const open = this.shadowRoot.getElementById("cats")?.open ? " open" : "";
-    const cats = order.map((id, i) => `<div class="row">
-        <input class="grow" data-ch="catname" data-cid="${esc(id)}" value="${esc(names[id])}" maxlength="40" aria-label="Nome categoria">
-        <button class="icon" data-act="catup" data-cid="${esc(id)}" aria-label="Sposta su"${i ? "" : " disabled"}>↑</button>
-        <button class="icon" data-act="catdown" data-cid="${esc(id)}" aria-label="Sposta giù"${i < order.length - 1 ? "" : " disabled"}>↓</button>
-        ${id === "altro" ? "" : `<button class="icon danger" data-act="catdel" data-cid="${esc(id)}" aria-label="Elimina categoria">×</button>`}
-      </div>`).join("");
     return `<div class="page-head"><h2>Lista della spesa</h2>
         <button class="primary" data-act="shop"${all !== "false" && !this._busy ? "" : " disabled"}>Aggiungi alla lista</button></div>
       <label class="row">Cadenza <select data-ch="cadence">${CADENCES.map(([k, l]) =>
         `<option value="${k}"${k === this._shop.cadence ? " selected" : ""}>${l}</option>`).join("")}</select></label>
       <fieldset><legend>Profili</legend>${profiles}</fieldset>
-      <fieldset><legend>Da comprare</legend>${items}</fieldset>
-      <details id="cats"${open}><summary>Categorie</summary>
-        <p class="muted">Ordinale come il tuo percorso nel supermercato: l'ordine vale solo per te, le categorie per tutti.</p>
-        ${cats}
-        <div class="row"><input class="grow" id="newcat" maxlength="40" placeholder="Nuova categoria" value="${esc(this._shop.newCat ?? "")}">
-          <button data-act="catadd">Aggiungi categoria</button></div>
-      </details>`;
+      <fieldset><legend>Da comprare</legend>${items}</fieldset>`;
+  }
+
+  // House categories in this user's order: drag the grip (or arrows on it) to reorder, rename in place, delete.
+  _vCats() {
+    const names = Object.fromEntries(this._categories.map((c) => [c.id, c.name]));
+    const rows = this._catOrder().map((id) => `<div class="catrow" data-cid="${esc(id)}">
+        <button class="icon grip" data-cid="${esc(id)}" aria-label="Trascina per spostare ${esc(names[id])} (o frecce su/giù)">≡</button>
+        <input data-ch="catname" data-cid="${esc(id)}" value="${esc(names[id])}" maxlength="40" aria-label="Nome categoria">
+        ${id === "altro" ? "<span></span>" : `<button class="icon danger" data-act="catdel" data-cid="${esc(id)}" aria-label="Elimina ${esc(names[id])}">×</button>`}
+      </div>`).join("");
+    return `<h2>Categorie</h2>
+      <p class="muted">Trascinale nell'ordine del tuo percorso nel supermercato: l'ordine vale solo per te, le categorie per tutti.</p>
+      <div class="catlist">${rows}</div>
+      <div class="row"><input class="grow" id="newcat" maxlength="40" placeholder="Nuova categoria" value="${esc(this._shop.newCat ?? "")}">
+        <button data-act="catadd">Aggiungi categoria</button></div>`;
   }
 
   // The todo list grouped by category in this user's order, a clear gap between groups; ticked items go to the bottom.

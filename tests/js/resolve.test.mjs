@@ -638,17 +638,28 @@ const RECIPES = {
   assert.match(html, /data-ch="scat" data-i="1" aria-label="Categoria di Pollo"><option value="">Automatica<\/option><option value="carne">/);
   p._shop.preview[1].manual = true; // hand-picked: selected by name
   assert.match(p._body(), /aria-label="Categoria di Pollo"><option value="">Automatica<\/option><option value="carne" selected>/);
-  assert.match(html, /data-act="catdel" data-cid="nuova"/);
-  assert.doesNotMatch(html, /data-act="catdel" data-cid="altro"/);
-  assert.match(html, /data-act="catup" data-cid="carne" aria-label="Sposta su" disabled/);
+  // Categorie tab: one row per category in the user's order (grip, name, delete); "altro" keeps an empty delete cell.
+  assert.doesNotMatch(html, /data-ch="catname"/); // not in Spesa any more
+  const cats = p._vCats();
+  assert.deepEqual([...cats.matchAll(/class="catrow" data-cid="([^"]+)"/g)].map((m) => m[1]), ["carne", "frutta", "nuova", "altro"]);
+  assert.match(cats, /data-act="catdel" data-cid="nuova"/);
+  assert.doesNotMatch(cats, /data-act="catdel" data-cid="altro"/);
+  assert.match(cats, /aria-label="Nome categoria">\s*<span><\/span>\s*<\/div>/); // altro: same columns as the others
+  assert.match(cats, /class="icon grip" data-cid="carne"/);
   const sent = [];
   p._hass.callWS = async (m) => { sent.push(plain(m)); return m.type === "shared_diet/set_category_order" ? { order: m.order } : {}; };
   const toasts = [];
   p.dispatchEvent = (e) => toasts.push(e.detail.message);
   p._flash = (m) => { throw new Error(m); };
-  await p._moveCategory("altro", -1);
+  // Arrow keys on a focused grip move its row (keyboard alternative to dragging); focus stays on the grip.
+  let prevented = false;
+  p._gripKey({ key: "ArrowUp", target: { closest: () => ({ dataset: { cid: "altro" } }) }, preventDefault: () => { prevented = true; } });
+  await new Promise((r) => setTimeout(r));
+  assert.equal(prevented, true);
   assert.deepEqual(sent.at(-1), { type: "shared_diet/set_category_order", order: ["carne", "frutta", "altro", "nuova"] });
   assert.deepEqual(plain(p._catOrder()), ["carne", "frutta", "altro", "nuova"]);
+  assert.equal(p._focus, '.grip[data-cid="altro"]');
+  p._focus = null;
   // A move the server refuses goes back to the saved order.
   const okCall = p._hass.callWS;
   let flashed = "";
@@ -660,10 +671,10 @@ const RECIPES = {
   // A refused new category keeps its typed name; a created one clears it.
   p.shadowRoot.getElementById = (id) => (id === "newcat" ? { value: " carne " } : null);
   await p._addCategory();
-  assert.match(p._body(), /id="newcat" maxlength="40" placeholder="Nuova categoria" value="carne"/);
+  assert.match(p._vCats(), /id="newcat" maxlength="40" placeholder="Nuova categoria" value="carne"/);
   p._hass.callWS = okCall;
   await p._addCategory();
-  assert.match(p._body(), /placeholder="Nuova categoria" value=""/);
+  assert.match(p._vCats(), /placeholder="Nuova categoria" value=""/);
   p.shadowRoot.getElementById = () => null;
   p._flash = (m) => { throw new Error(m); };
   await p._setFoodCategory(0, "altro"); // the food name, not the row text
@@ -672,19 +683,21 @@ const RECIPES = {
   await p._setFoodCategory(0, ""); // already automatic: nothing sent
   await p._renameCategory("carne", { value: "  Carne " });
   assert.equal(sent.length, before);
-  // A push while typing in a category field neither reloads nor re-renders; the next action catches up.
-  let loads = 0;
-  const realLoad = p._loadShop;
-  p._loadShop = () => { loads++; };
+  // A push while typing in a category field does not re-render (it would wipe the text); the next action catches up.
+  let renders = 0;
+  const realRender = p._render;
+  p._render = () => { renders++; };
+  p._view = "cats";
   p.shadowRoot.activeElement = { matches: (sel) => sel.includes("#newcat") };
   p._onData({}, {}, p._categories);
-  assert.equal(loads, 0);
+  assert.equal(renders, 0);
   assert.equal(p._shop.stale, true);
   p.shadowRoot.activeElement = null;
   await p._run(async () => {});
-  assert.equal(loads, 1);
-  p._loadShop = realLoad;
-  p._shop.stale = false;
+  assert.equal(p._shop.stale, false);
+  assert.ok(renders > 0);
+  p._render = realRender;
+  p._view = "shop";
   await p._setFoodCategory(1, ""); // back to automatic
   assert.deepEqual(sent.at(-1), { type: "shared_diet/set_food_category", food: "Pollo", category_id: null });
   await p._renameCategory("carne", { value: " Macelleria " });
