@@ -5,6 +5,11 @@ const TABS = [
 ];
 const DAYS = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato", "Domenica"];
 const DAYS_SHORT = ["Lun", "Mar", "Mer", "Gio", "Ven", "Sab", "Dom"];
+// Material Design "delete" icon (same as HA's mdi:delete), drawn in the text color.
+const TRASH = `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor"
+  d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z"/></svg>`;
+// Per-user panel preferences, kept by HA's frontend user data (server side, follows the user on every device).
+const PREFS_KEY = "shared_diet";
 const CADENCES = [["1w", "Settimanale"], ["2w", "Ogni 2 settimane"], ["1m", "Mensile"]];
 
 const CSS = `
@@ -375,10 +380,8 @@ class SharedDietPanel extends HTMLElement {
     let cadence = "1w";
     try { cadence = localStorage.getItem("shared_diet.cadence") ?? "1w"; } catch { /* storage blocked */ }
     this._shop = { cadence: CADENCES.some(([k]) => k === cadence) ? cadence : "1w", off: new Set(), preview: null, skip: new Set(), seq: 0, order: [] };
-    let listView = "check";
-    try { listView = localStorage.getItem("shared_diet.listview") === "card" ? "card" : "check"; } catch { /* storage blocked */ }
     // Lista tab: live items of the family todo entity, each with its category (by item text).
-    this._todoList = { view: listView, entity: "", items: null, cats: new Map(), unsub: null };
+    this._todoList = { view: "check", entity: "", items: null, cats: new Map(), unsub: null };
     this.shadowRoot.addEventListener("click", (e) => this._onClick(e));
     this.shadowRoot.addEventListener("change", (e) => this._onChange(e));
     this.shadowRoot.addEventListener("input", (e) => this._onInput(e));
@@ -481,7 +484,10 @@ class SharedDietPanel extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
-    if (!this._unsub) this._subscribe();
+    if (!this._unsub) {
+      this._subscribe();
+      this._loadPrefs();
+    }
     // Not re-rendered on every hass update: that would wipe inputs the user is typing into.
     if (!this._rendered) this._render();
   }
@@ -816,6 +822,19 @@ class SharedDietPanel extends HTMLElement {
       });
   }
 
+  async _loadPrefs() {
+    try {
+      const { value } = await this._hass.callWS({ type: "frontend/get_user_data", key: PREFS_KEY });
+      if (value?.listView === "card" || value?.listView === "check") this._todoList.view = value.listView;
+    } catch { /* defaults */ }
+    if (this._view === "list" && !this._busy) this._render();
+  }
+
+  _savePrefs() {
+    this._hass.callWS({ type: "frontend/set_user_data", key: PREFS_KEY, value: { listView: this._todoList.view } })
+      .catch((err) => this._flash(err?.message || "Preferenza non salvata"));
+  }
+
   // This user's saved category order, for the tabs that need it without a shopping preview.
   _loadOrder() {
     const view = this._view;
@@ -1129,7 +1148,7 @@ class SharedDietPanel extends HTMLElement {
       case "litem": return this._toggleItem(d.uid);
       case "lview":
         this._todoList.view = d.v;
-        try { localStorage.setItem("shared_diet.listview", d.v); } catch { /* storage blocked */ }
+        this._savePrefs();
         return this._render();
       case "wday": this._wday = Number(d.d); return this._render();
     }
@@ -1574,7 +1593,7 @@ class SharedDietPanel extends HTMLElement {
     const rows = this._catOrder().map((id) => `<div class="catrow" data-cid="${esc(id)}">
         <button class="icon grip" data-cid="${esc(id)}" aria-label="Trascina per spostare ${esc(names[id])} (o frecce su/giù)">≡</button>
         <input data-ch="catname" data-cid="${esc(id)}" value="${esc(names[id])}" maxlength="40" aria-label="Nome categoria">
-        ${id === "altro" ? "<span></span>" : `<button class="icon danger" data-act="catdel" data-cid="${esc(id)}" aria-label="Elimina ${esc(names[id])}">×</button>`}
+        ${id === "altro" ? "<span></span>" : `<button class="icon danger" data-act="catdel" data-cid="${esc(id)}" aria-label="Elimina ${esc(names[id])}" title="Elimina">${TRASH}</button>`}
       </div>`).join("");
     return `<h2>Categorie</h2>
       <p class="muted">Trascinale nell'ordine del tuo percorso nel supermercato: l'ordine vale solo per te, le categorie per tutti.</p>

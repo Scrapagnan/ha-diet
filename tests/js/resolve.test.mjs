@@ -1050,6 +1050,8 @@ const RECIPES = {
     callWS: async (m) => {
       ws.push(plain(m));
       if (m.type === "shared_diet/get_category_order") return { order: ["frutta"] };
+      if (m.type === "frontend/get_user_data") return { value: { listView: "check" } };
+      if (m.type === "frontend/set_user_data") return {};
       return { categories: m.texts.map((t) => (t.startsWith("Pollo") ? "carne" : t.startsWith("Mele") ? "frutta" : "altro")) };
     },
     callService: async (...a) => { services.push(plain(a)); },
@@ -1071,6 +1073,14 @@ const RECIPES = {
   assert.match(html, /<summary>Completati \(1\)<\/summary><label class="check"><input type="checkbox" data-ch="litem" data-uid="4" checked>/);
   assert.match(html, /aria-pressed="true">Checkbox/);
   p._onClick({ target: { closest: () => ({ dataset: { act: "lview", v: "card" } }) } });
+  // Saved per HA user (frontend user data, server side), not per browser; read back when the panel loads.
+  await new Promise((r) => setTimeout(r));
+  assert.deepEqual(ws.at(-1), { type: "frontend/set_user_data", key: "shared_diet", value: { listView: "card" } });
+  const q = new SharedDietPanel();
+  q._render = () => {};
+  q._hass = { callWS: async (m) => (m.type === "frontend/get_user_data" ? { value: { listView: "card" } } : {}) };
+  await q._loadPrefs();
+  assert.equal(q._todoList.view, "card");
   html = p._body();
   assert.match(html, /class="lcard" data-act="litem" data-uid="2"/);
   await p._toggleItem("2");
