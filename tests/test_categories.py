@@ -5,7 +5,7 @@ from datetime import date
 import pytest
 
 from custom_components.shared_diet.const import DEFAULT_CATEGORIES, STORAGE_KEY
-from custom_components.shared_diet.model import category_for, effective_order, food_of, shopping_items
+from custom_components.shared_diet.model import category_for, effective_order, food_of, shopping_items, shopping_text
 from custom_components.shared_diet.store import MAX_CATEGORIES, DietStore, DuplicateNameError, LimitError
 
 from test_websocket import MONDAY, _user_client, call, item, meal, own_profile, setup_entry  # noqa: F401
@@ -55,6 +55,7 @@ def test_category_for_override_and_missing_categories():
     [
         ("Petto di pollo - 840 g", "Petto di pollo"),
         ("Olio - 7.5 ml", "Olio"),
+        ("Pollo - 1,05 kg", "Pollo"),  # decimal comma
         ("Pane - 2 ", "Pane"),  # unit-less row
         ("Sale (q.b.)", "Sale"),
         ("  Detersivo   piatti ", "Detersivo piatti"),  # typed by hand
@@ -224,3 +225,17 @@ async def test_removed_user_order_is_dropped(hass, hass_storage):
     await s.async_delete_user_profile("removed")  # user without a profile: the order still goes
     await s.async_sync_users({"kept": "Kept"}, {})
     assert hass_storage[STORAGE_KEY]["data"]["category_order"] == {"kept": ["bevande"]}
+
+
+@pytest.mark.parametrize(
+    ("qty", "unit", "text"),
+    [
+        (1000.0, "g", "Pollo - 1000 g"),
+        (1050.0, "g", "Pollo - 1,05 kg"),
+        (2500.0, "g", "Pollo - 2,5 kg"),
+        (250.5, "g", "Pollo - 250,5 g"),
+        (1500.0, "ml", "Pollo - 1500 ml"),
+    ],
+)
+def test_shopping_text_kg_and_decimal_comma(qty, unit, text):
+    assert shopping_text("Pollo", qty, unit) == text

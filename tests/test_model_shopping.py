@@ -89,7 +89,7 @@ def test_uses_chosen_alternative_and_exception():
 
 
 def test_decimal_qty_formatting():
-    assert "Olio - 7.5 ml" in texts([p_olio_2_5_x3], MON, MON)
+    assert "Olio - 7,5 ml" in texts([p_olio_2_5_x3], MON, MON)
 
 
 def test_food_whitespace_collapsed_before_summing():

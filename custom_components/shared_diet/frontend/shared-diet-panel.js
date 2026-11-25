@@ -100,6 +100,7 @@ details p { white-space: pre-line; margin: 6px 0; }
 .lcards { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
 .lcard { min-height: 64px; text-align: left; white-space: normal; border-radius: 12px;
   background: var(--card-background-color, #fff); box-shadow: 0 1px 3px rgba(0, 0, 0, .2); }
+.lcard .lqty { display: block; font-size: 0.85em; opacity: 0.75; margin-top: 2px; }
 .lcard.done { opacity: 0.55; text-decoration: line-through; box-shadow: none; }
 details.lgroup .lcards { margin-top: 8px; }
 .or { font-size: 12px; font-weight: 600; text-align: center; color: var(--secondary-text-color, #727272); }
@@ -140,6 +141,11 @@ const pad = (n) => String(n).padStart(2, "0");
 const iso = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const parseIso = (s) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
 const addDays = (s, n) => { const d = parseIso(s); d.setDate(d.getDate() + n); return iso(d); };
+// Card text of a list item: the food, then its quantity on a smaller line ("Pollo - 1,05 kg", "Sale (q.b.)").
+// Same split as the server's food_of; items typed by hand stay whole.
+const splitQty = (s) => s.match(/^(.+?) - (\d[\d.,e+-]*(?: .*)?)$/) ?? s.match(/^(.+) \(([^()]*)\)$/);
+const cardText = (s) => { const m = splitQty(s); return m ? `${esc(m[1])}<span class="lqty">${esc(m[2])}</span>` : esc(s); };
+
 const MAX_SHOP_QTY = 100000; // as the server's cap on an edited shopping quantity
 
 // Edited quantities to send with "Aggiungi alla lista": {row text: qty} for selected rows with a quantity whose field
@@ -1658,8 +1664,8 @@ class SharedDietPanel extends HTMLElement {
     const check = (i) => `<label class="check"><input type="checkbox" data-ch="litem" data-uid="${esc(i.uid)}"${
       i.status === "completed" ? " checked" : ""}> ${esc(i.summary)}</label>`;
     const card = (i) => i.status === "completed"
-      ? `<button class="lcard done" data-act="litem" data-uid="${esc(i.uid)}" aria-label="Riapri ${esc(i.summary)}">${esc(i.summary)}</button>`
-      : `<button class="lcard" data-act="litem" data-uid="${esc(i.uid)}" aria-label="Completa ${esc(i.summary)}">${esc(i.summary)}</button>`;
+      ? `<button class="lcard done" data-act="litem" data-uid="${esc(i.uid)}" aria-label="Riapri ${esc(i.summary)}">${cardText(i.summary)}</button>`
+      : `<button class="lcard" data-act="litem" data-uid="${esc(i.uid)}" aria-label="Completa ${esc(i.summary)}">${cardText(i.summary)}</button>`;
     // Kept open across re-renders (a tick inside it re-renders the tab) once the user opened it.
     const doneOpen = this.shadowRoot.getElementById("done")?.open;
     const listHtml = (list) => (view === "card" ? `<div class="lcards">${list.map(card).join("")}</div>` : list.map(check).join(""));

@@ -138,7 +138,7 @@ def category_for(food: str, categories: list[dict], overrides: dict[str, str], k
     return guess if guess in ids else FALLBACK_CATEGORY
 
 
-_QTY_SUFFIX = re.compile(r" - \d[\d.e+-]*(?: .*)?$")
+_QTY_SUFFIX = re.compile(r" - \d[\d.,e+-]*(?: .*)?$")
 _NOTE_SUFFIX = re.compile(r" \([^()]*\)$")
 
 
@@ -208,8 +208,10 @@ def shopping_items(
 
 
 def shopping_text(food: str, qty: float, unit: str) -> str:
-    """Text of a shopping row with a quantity: "Pollo - 300 g"."""
-    return f"{food} - {qty:g} {unit}"
+    """Text of a shopping row with a quantity: "Pollo - 300 g"; over 1000 g in kg. Decimal comma: "Pollo - 1,05 kg"."""
+    if unit == "g" and qty > 1000:
+        qty, unit = qty / 1000, "kg"
+    return f"{food} - {f'{qty:g}'.replace('.', ',')} {unit}"
 
 
 def format_item(item: dict) -> str:

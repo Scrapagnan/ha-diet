@@ -1,4 +1,4 @@
-// Run: node tests/js/shopqty.test.mjs. Loads shopQty from the panel source without a browser.
+// Run: node tests/js/shopqty.test.mjs. Loads shopQty and splitQty from the panel source without a browser.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 const panel = fileURLToPath(new URL("../../custom_components/shared_diet/frontend/shared-diet-panel.js", import.meta.url));
 const ctx = { HTMLElement: class {}, customElements: { get: () => undefined, define() {} } };
 vm.createContext(ctx);
-const { shopQty } = vm.runInContext(`${readFileSync(panel, "utf8")}\n;({ shopQty });`, ctx);
+const { shopQty, splitQty } = vm.runInContext(`${readFileSync(panel, "utf8")}\n;({ shopQty, splitQty });`, ctx);
 const run = (edits, skip = []) => JSON.parse(JSON.stringify(shopQty(rows, new Map(edits), new Set(skip))));
 
 const rows = [
@@ -28,3 +28,11 @@ assert.throws(() => run([["Pasta - 80 g", "?"]]), /Pasta/); // unparsable input 
 assert.throws(() => run([["Pasta - 80 g", "100001"]]), /Pasta/);
 assert.deepEqual(run([["Pasta - 80 g", "100000"]]), { "Pasta - 80 g": 100000 });
 console.log("shopqty ok");
+
+const split = (s) => { const m = splitQty(s); return m ? [m[1], m[2]] : null; };
+assert.deepEqual(split("Pollo - 1,05 kg"), ["Pollo", "1,05 kg"]);
+assert.deepEqual(split("Olio - 70 ml"), ["Olio", "70 ml"]);
+assert.deepEqual(split("Sale (q.b.)"), ["Sale", "q.b."]);
+assert.equal(split("Detersivo piatti"), null);
+assert.equal(split("Pasta - integrale"), null);
+console.log("splitqty ok");

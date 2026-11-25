@@ -269,7 +269,7 @@ async def test_shopping_edited_qty(hass, client):
     # Rows without a quantity and unknown rows ignore edits; the edited row is added with its new quantity.
     resp = await call(client, "shopping", **base, add=True, qty={"Pasta - 80 g": 250.5, "Sale (q.b.)": 3, "Riso - 1 g": 9})
     assert resp["success"]
-    assert sorted(i["summary"] for i in client.store.shopping) == ["Pasta - 250.5 g", "Sale (q.b.)"]
+    assert sorted(i["summary"] for i in client.store.shopping) == ["Pasta - 250,5 g", "Sale (q.b.)"]
 
     # Preview ignores edits.
     resp = await call(client, "shopping", **base, qty={"Pasta - 80 g": 1})
