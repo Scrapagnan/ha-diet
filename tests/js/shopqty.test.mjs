@@ -1,13 +1,9 @@
 // Run: node tests/js/shopqty.test.mjs. Loads the shopping-text helpers from the panel source without a browser.
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import vm from "node:vm";
-import { fileURLToPath } from "node:url";
+import { loadPanel } from "./load.mjs";
 
-const panel = fileURLToPath(new URL("../../custom_components/shared_diet/frontend/shared-diet-panel.js", import.meta.url));
 const ctx = { HTMLElement: class {}, customElements: { get: () => undefined, define() {} } };
-vm.createContext(ctx);
-const { shopQty, splitQty, shopText } = vm.runInContext(`${readFileSync(panel, "utf8")}\n;({ shopQty, splitQty, shopText });`, ctx);
+const { shopQty, splitQty, shopText } = loadPanel(ctx, ["shopQty", "splitQty", "shopText"]);
 const run = (edits, skip = []) => JSON.parse(JSON.stringify(shopQty(rows, new Map(edits), new Set(skip))));
 
 const rows = [

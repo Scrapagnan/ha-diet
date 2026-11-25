@@ -1,4 +1,9 @@
-/* Dieta: pannello laterale di Shared Diet. Web component vanilla, nessuna dipendenza. */
+/* Dieta: pannello laterale di Shared Diet. Web component vanilla; logica condivisa in shared-diet-core.js. */
+
+import {
+  esc, iso, parseIso, addDays, weekday, fmtDay, fmtItem, foldText, zeroChoice, byTime, own, recipeOf, itemLabel, resolveMeal,
+  mealGroups, nextGroup, todayPlan, groupsHtml, subscribeDiet,
+} from "./shared-diet-core.js";
 
 const TABS = [
   ["today", "Oggi"], ["week", "Settimana"], ["choices", "Scelte"], ["recipes", "Ricette"], ["shop", "Spesa"], ["list", "Lista"], ["cats", "Categorie"], ["profiles", "Profili"],
@@ -137,14 +142,9 @@ fieldset { border: 1px solid var(--divider-color, #e0e0e0); border-radius: 8px; 
 fieldset.ro { border: 0; padding: 0; margin: 0; min-width: 0; }
 `;
 
-const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const uid = () =>
   (crypto.randomUUID ? crypto.randomUUID() : [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("")).replaceAll("-", "");
-const pad = (n) => String(n).padStart(2, "0");
-const iso = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-const parseIso = (s) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
-const addDays = (s, n) => { const d = parseIso(s); d.setDate(d.getDate() + n); return iso(d); };
 // Card text of a list item: the food, then its quantity on a smaller line ("Pollo - 1,05 kg", "Sale (q.b.)").
 // Same split as the server's food_of; items typed by hand stay whole.
 const splitQty = (s) => s.match(/^(.+?) - (\d[\d.,e+-]*(?: .*)?)$/) ?? s.match(/^(.+) \(([^()]*)\)$/);
@@ -182,68 +182,14 @@ const cadenceRange = (cadence, from = iso(new Date())) => {
   d.setMonth(d.getMonth() + 1, d.getDate() - 1); // Jan 31 -> Mar 2: overflow is fine, still under the 62-day cap
   return { from, to: iso(d) };
 };
-const weekday = (s) => (parseIso(s).getDay() + 6) % 7; // 0 = lunedì, as in model.py
-const fmtDay = (s, opts) => parseIso(s).toLocaleDateString("it-IT", opts);
-// Mirrors model.py format_item: "Nome 80 g", "Nome (nota)", "Nome", "Ricetta: ingredienti".
-const fmtItem = (it) => {
-  if (!it) return "";
-  if ("recipe" in it) return it.ingredients.length ? `${it.food}: ${it.ingredients.map((i) => fmtItem(i)).join(", ")}` : it.food;
-  return it.qty !== null ? `${it.food} ${it.qty} ${it.unit}` : it.note ? `${it.food} (${it.note})` : it.food;
-};
 const blankItem = () => ({ food: "", qty: null, unit: "g", note: "" });
 const newMeal = () => ({ id: uid(), name: "", time: null, options: [[{ alts: [blankItem()] }]] });
-// Comparison key for food names: case, accents and repeated spaces ignored ("Caffè " ~ "caffe").
-const foldText = (s) => s.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().trim().replace(/\s+/g, " ");
 // Selector of a food input in the meal editor (to focus a just-added field).
 const foodSel = (ctx, i, o, l, a) =>
   `input.food[data-ctx="${ctx}"][data-i="${i}"][data-o="${o}"][data-l="${l}"][data-a="${a}"]`;
-const zeroChoice = () => ({ option: 0, lines: {} });
-// Meals by time ("HH:MM" compares as text); meals without a time last. Stable: equal times keep their order.
-// A meal is eaten with profile `pid` when its shared_with is absent/null (everyone) or lists it.
-const sharesWith = (m, pid) => !Array.isArray(m.shared_with) || m.shared_with.includes(pid);
-const byTime = (a, b) => { const x = a.time || "~", y = b.time || "~"; return x < y ? -1 : x > y ? 1 : 0; };
-// Mirrors model.py nearest_meal: of the candidates ({ time, tomorrow? }), the one nearest to `now` ("HH:MM" today),
-// before or after; ties go to the future one. ponytail: wall-clock minutes, a DST night can be off by an hour.
-const nearestMeal = (cands, now) => {
-  const mins = (t) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
-  const score = (c) => { const d = mins(c.time) + (c.tomorrow ? 1440 : 0) - mins(now); return Math.abs(d) * 2 + (d < 0); };
-  return cands.reduce((best, c) => (!best || score(c) < score(best) ? c : best), null);
-};
-// A meal offers choices with several options or lines, or with a recipe that has an ingredient with alternatives.
 const hasChoice = (m, recipes) => m.options.length > 1 || m.options.some((o) => o.some((l) => l.alts.length > 1
   || l.alts.some((a) => "recipe" in a && recipeOf(a.recipe, recipes)?.ingredients.some((g) => g.alts.length > 1))));
 
-// Mirrors model.py: effective day, choice priority, option/alternative resolution.
-const effectiveDay = (p, s) => p.exceptions[s] ?? p.week[String(weekday(s))];
-// Meal ids come from stored data: read only own keys, or "constructor"/"toString" would resolve to Object internals.
-const own = (o, k) => (o && Object.hasOwn(o, k) ? o[k] : undefined);
-const choiceFor = (p, s, mid) => own(own(p.choices.dates, s), mid) ?? own(p.choices.defaults, mid) ?? zeroChoice();
-const recipeOf = (rid, recipes) => (Object.hasOwn(recipes, rid) ? recipes[rid] : null);
-// Mirrors model.py expand_item: a recipe item becomes its name and, per ingredient, the chosen alternative with the person's grams
-// (override by alt id, else default). Ingredients with 2+ alternatives also list them in `choices` (panel only: model.py skips them).
-function expandItem(item, profile, recipes, recipeChoice = {}) {
-  if (!("recipe" in item)) return item;
-  const recipe = recipeOf(item.recipe, recipes);
-  if (!recipe) return { recipe: item.recipe, food: "Ricetta mancante", note: "", ingredients: [], missing: true, choices: [] };
-  const overrides = profile.recipe_qty?.[item.recipe] ?? {};
-  const grams = (a) => (Object.hasOwn(overrides, a.id) ? overrides[a.id] : a.qty);
-  const ingredients = [];
-  const choices = [];
-  for (const ing of recipe.ingredients) {
-    const alt = ing.alts.find((a) => a.id === recipeChoice[ing.id]) ?? ing.alts[0];
-    ingredients.push({ food: alt.food, qty: grams(alt), unit: alt.unit, note: "" });
-    if (ing.alts.length >= 2) {
-      choices.push({
-        ingredient_id: ing.id,
-        alts: ing.alts.map((a) => ({ id: a.id, food: a.food, qty: grams(a), unit: a.unit })),
-        chosen: alt.id,
-      });
-    }
-  }
-  return { recipe: item.recipe, food: recipe.name, note: recipe.note, ingredients, missing: false, choices };
-}
-// Display name of a meal item: the recipe's name, or the food name ("Ricetta mancante" if the recipe was deleted).
-const itemLabel = (item, recipes) => ("recipe" in item ? recipeOf(item.recipe, recipes)?.name ?? "Ricetta mancante" : item.food);
 // Sets one person's grams for a recipe ingredient (value: number), or clears the override (value: null). Returns a new map; emptied recipe maps are dropped.
 function setRecipeQty(map, rid, iid, value) {
   const next = { ...map };
@@ -260,33 +206,6 @@ function matchRecipes(q, recipes) {
     .filter((r) => foldText(r.name).includes(q))
     .sort((a, b) => (foldText(b.name).startsWith(q) - foldText(a.name).startsWith(q)) || a.name.localeCompare(b.name, "it"))
     .slice(0, 6);
-}
-// Totals of resolved items (Oggi, several people): same food and unit summed; a recipe keeps its name and sums its ingredients.
-// Items without a quantity are listed once.
-function sumItems(items) {
-  const add = (map, it) => {
-    const k = `${foldText(it.food)}|${it.unit ?? ""}|${it.qty === null}`;
-    const cur = map.get(k);
-    if (!cur) map.set(k, { ...it });
-    else if (cur.qty !== null) cur.qty = Math.round((cur.qty + it.qty) * 1000) / 1000;
-  };
-  const rows = new Map();
-  for (const it of items) {
-    if (!("recipe" in it)) { add(rows, it); continue; }
-    const k = `recipe|${it.recipe}`;
-    if (!rows.has(k)) rows.set(k, { ...it, parts: new Map() });
-    for (const g of it.ingredients) add(rows.get(k).parts, g);
-  }
-  return [...rows.values()].map(({ parts, ...r }) => (parts ? { ...r, ingredients: [...parts.values()] } : r));
-}
-function resolveMeal(meal, choice, profile, recipes) {
-  const opt = choice.option >= 0 && choice.option < meal.options.length ? choice.option : 0;
-  const items = meal.options[opt].map((line, i) => {
-    const alt = choice.lines[String(i)] ?? 0;
-    const a = line.alts[alt >= 0 && alt < line.alts.length ? alt : 0];
-    return a && expandItem(a, profile ?? {}, recipes ?? {}, choice.recipes?.[a.recipe] ?? {});
-  }).filter(Boolean); // a line emptied in the editor has no alternative to show
-  return { option: opt, items };
 }
 
 // Cleans the draft before saving: trims, drops empty food rows, rejects empty meals. Recipe references pass through as {recipe} only.
@@ -554,19 +473,18 @@ class SharedDietPanel extends HTMLElement {
   disconnectedCallback() {
     clearInterval(this._tick);
     this._listWatch(true);
-    this._unsub?.then((unsub) => unsub?.(), () => {});
+    this._unsub?.();
     this._unsub = null;
     document.getElementById("shared-diet-error")?.remove(); // don't leave it over other HA pages
   }
 
   _subscribe() {
-    this._unsub = this._hass.connection
-      .subscribeMessage((msg) => this._onData(msg.profiles, msg.recipes, msg.categories), { type: "shared_diet/subscribe" })
-      .catch((err) => {
-        this._loadError = err?.message || "Impossibile caricare i dati";
-        this._render();
-        return () => {};
-      });
+    // Shared with the dashboard cards: one server subscription per connection.
+    this._unsub = subscribeDiet(this._hass, (msg, err) => {
+      if (msg) return this._onData(msg.profiles, msg.recipes, msg.categories);
+      this._loadError = err?.message || "Impossibile caricare i dati";
+      this._render();
+    });
   }
 
   // Latest server data. Unsaved edits to the selected profile survive; a deleted profile resets the selection.
@@ -1490,111 +1408,25 @@ class SharedDietPanel extends HTMLElement {
     return `<datalist id="units">${units.map((u) => `<option value="${esc(u)}">`).join("")}</datalist>`;
   }
 
-  // Read-only resolved items as <li>. Recipe: name, ingredients with grams, preparation note folded away (withNote).
-  // With "Vedi alternative": the ingredients' other alternatives, greyed out, after the chosen ones.
-  _itemsHtml(items, { withAlts = false, withNote = true } = {}) {
-    const otherAlts = (i) => (withAlts ? (i.choices ?? []).map((c) => {
-      const chosen = c.alts.find((a) => a.id === c.chosen);
-      const others = c.alts.filter((a) => a.id !== c.chosen).map((a) => fmtItem(a)).join(" / ");
-      return `<li class="muted">Alternativa a ${esc(chosen.food)}: ${esc(others)}</li>`;
-    }).join("") : "");
-    return items.map((i) => ("recipe" in i
-      ? `<li><strong>${esc(i.food)}</strong>${i.ingredients.length
-        ? `<ul class="muted">${i.ingredients.map((g) => `<li>${esc(fmtItem(g))}</li>`).join("")}${otherAlts(i)}</ul>` : ""}${
-        withNote && i.note.trim() ? `<details><summary>Preparazione</summary><p>${esc(i.note)}</p></details>` : ""}</li>`
-      : `<li>${esc(fmtItem(i))}</li>`)).join("");
-  }
-
-  // Meals of a date for every profile, grouped by meal name (case/accents ignored), sorted by the group's earliest time.
-  // Same-name meals share a group only through mutual sharing (each includes the other's profile), transitively.
   _groups(s) {
-    const byName = new Map();
-    for (const p of Object.values(this._profiles).filter((p) => !p.disabled)) {
-      for (const m of effectiveDay(p, s)) {
-        const k = foldText(m.name);
-        if (!byName.has(k)) byName.set(k, []);
-        byName.get(k).push({ p, m });
-      }
-    }
-    const groups = [];
-    for (const rows of byName.values()) {
-      // Union-find over mutual links. ponytail: O(n²) pairs per name, n is at most profiles x meals per day.
-      const parent = rows.map((_, i) => i);
-      const find = (i) => (parent[i] === i ? i : (parent[i] = find(parent[i])));
-      for (let i = 0; i < rows.length; i++) for (let j = i + 1; j < rows.length; j++) {
-        if (sharesWith(rows[i].m, rows[j].p.id) && sharesWith(rows[j].m, rows[i].p.id)) parent[find(i)] = find(j);
-      }
-      const parts = new Map();
-      rows.forEach((row, i) => { const k = find(i); if (!parts.has(k)) parts.set(k, []); parts.get(k).push(row); });
-      // Same name and time: stable order by profile name.
-      const sorted = [...parts.values()].sort((a, b) => a[0].p.name.localeCompare(b[0].p.name, "it"));
-      for (const part of sorted) {
-        const g = { name: part[0].m.name, time: null, rows: [] };
-        for (const { p, m } of part) {
-          if (m.time && (!g.time || m.time < g.time)) g.time = m.time; // earliest time of the group
-          g.rows.push({ p, m, r: resolveMeal(m, choiceFor(p, s, m.id), p, this._recipes) });
-        }
-        groups.push(g);
-      }
-    }
-    return groups.sort(byTime);
+    return mealGroups(this._profiles, this._recipes, s);
   }
 
-  // Next meal: of the timed groups of date `s` (list = this._groups(s)) and the first timed group of the day after
-  // (marked tomorrow), the one nearest to `now`.
   _next(list, s, now) {
-    const first = this._groups(addDays(s, 1)).find((g) => g.time);
-    return nearestMeal([...list.filter((g) => g.time), ...(first ? [{ ...first, tomorrow: true }] : [])], now);
+    return nextGroup(this._profiles, this._recipes, list, s, now);
   }
 
-  // Meal groups of a date: summed totals, then each person's portion. The nearest group to `now` is highlighted as next.
-  // `list` and `next` default to the groups of `s` and their nearest; pass them when already computed.
+  // Meal groups of a date; `list` and `next` default to the groups of `s` and their nearest to `now`.
   _today(s, now, withAlts = false, list = this._groups(s), next = this._next(list, s, now)) {
-    if (!list.length) return `<p class="muted">Nessun pasto.</p>`;
-    // Same food (or recipe) for two people: comparison key of a resolved item.
-    const key = (i) => ("recipe" in i ? `recipe|${i.recipe}` : `${foldText(i.food)}|${i.unit ?? ""}`);
-    return list.map((g) => {
-      // Totals only when 2+ people share at least one food: one person, or entirely different meals, get none.
-      const seen = new Map(); // item key -> profile id that has it
-      const shared = new Set(g.rows.map((x) => x.p.id)).size > 1 && g.rows.some(({ p, r }) => r.items.some((i) => {
-        const k = key(i);
-        if (seen.has(k) && seen.get(k) !== p.id) return true;
-        seen.set(k, p.id);
-        return false;
-      }));
-      const people = g.rows.map(({ p, m, r }) => {
-        const alts = m.options.map((opt, oi) => `<li class="${oi === r.option ? "" : "muted"}">${m.options.length > 1 ? `Opzione ${oi + 1}: ` : ""}${
-          opt.map((l) => l.alts.map((a) => esc("recipe" in a ? itemLabel(a, this._recipes) : fmtItem(a))).join(" / ")).join(" + ")}</li>`).join("");
-        return `<div class="sub">${esc(p.name)}</div>
-          <ul>${this._itemsHtml(r.items, { withAlts, withNote: !shared })}</ul>
-          ${withAlts ? `<ul class="alts">${alts}</ul>` : ""}`;
-      }).join("");
-      return `<section class="card${g === next ? " next" : ""}">
-        <div class="meal-head"><strong>${esc(g.name)}${g === next ? `<span class="tag">Prossimo</span>` : ""}</strong>
-          <span class="muted">${esc(g.time ?? "senza orario")}</span></div>
-        ${shared ? `<div class="sub">Totale</div><ul>${this._itemsHtml(sumItems(g.rows.flatMap(({ r }) => r.items)))}</ul>` : ""}
-        ${people}
-      </section>`;
-    }).join("");
+    return groupsHtml(list, next, this._recipes, withAlts);
   }
 
   _vToday() {
     if (!Object.keys(this._profiles).length) return this._picker();
-    const d = new Date();
-    let day = iso(d);
-    let now = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-    // Tomorrow's first meal is nearer than any of today's: show tomorrow; from 00:00 its first meal is the nearest.
-    // A day without timed meals stays on today.
-    const list = this._groups(day);
-    const next = this._next(list, day, now);
-    const tomorrow = list.some((g) => g.time) && next?.tomorrow === true;
-    const body = tomorrow
-      ? this._today(addDays(day, 1), "00:00", this._showAlts)
-      : this._today(day, now, this._showAlts, list, next);
-    if (tomorrow) day = addDays(day, 1);
+    const { day, now, tomorrow, list, next } = todayPlan(this._profiles, this._recipes);
     return `<h2>${tomorrow ? "Domani · " : ""}${esc(fmtDay(day, { weekday: "long", day: "numeric", month: "long" }))}</h2>
       <button data-act="alts">${this._showAlts ? "Nascondi alternative" : "Vedi alternative"}</button>
-      ${body}`;
+      ${this._today(day, now, this._showAlts, list, next)}`;
   }
 
   _roNote() {

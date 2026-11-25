@@ -1,10 +1,8 @@
 // Run: node tests/js/resolve.test.mjs. Loads the panel's meal resolution, recipe expansion and read views without a browser.
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import vm from "node:vm";
-import { fileURLToPath } from "node:url";
+import { loadPanel } from "./load.mjs";
 
-const panel = fileURLToPath(new URL("../../custom_components/shared_diet/frontend/shared-diet-panel.js", import.meta.url));
 const ctx = {
   // The panel constructor calls attachShadow(); a plain stub is enough for rendering helpers.
   // Tests run as an admin (every profile editable) unless they set hass.user themselves.
@@ -18,9 +16,10 @@ const ctx = {
   crypto: globalThis.crypto, // uid() in the panel
   CustomEvent: class { constructor(type, init) { this.type = type; Object.assign(this, init); } },
 };
-vm.createContext(ctx);
-const { expandItem, fmtItem, resolveMeal, cleanProfile, cleanRecipe, setRecipeQty, matchRecipes, cadenceRange, sumItems, nearestMeal, SharedDietPanel } = vm.runInContext(
-  `${readFileSync(panel, "utf8")}\n;({ expandItem, fmtItem, resolveMeal, cleanProfile, cleanRecipe, setRecipeQty, matchRecipes, cadenceRange, sumItems, nearestMeal, SharedDietPanel });`, ctx);
+const { expandItem, fmtItem, resolveMeal, cleanProfile, cleanRecipe, setRecipeQty, matchRecipes, cadenceRange, sumItems, nearestMeal, SharedDietPanel } = loadPanel(ctx, [
+  "expandItem", "fmtItem", "resolveMeal", "cleanProfile", "cleanRecipe", "setRecipeQty", "matchRecipes", "cadenceRange", "sumItems",
+  "nearestMeal", "SharedDietPanel",
+]);
 // Recipe draft cleaning: trims, drops alternatives without food and ingredients left without any, keeps ids and rev, rejects negative quantities.
 {
   const cleaned = cleanRecipe({ id: "r1", name: "  Pancake ", note: " Mescolare ", rev: 3, ingredients: [

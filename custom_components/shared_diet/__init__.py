@@ -29,15 +29,27 @@ _LOGGER = logging.getLogger(__name__)
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 PLATFORMS = [Platform.SENSOR, Platform.TODO]
 STATIC_URL = "/shared_diet_static"
-PANEL_JS = Path(__file__).parent / "frontend" / "shared-diet-panel.js"
+FRONTEND_DIR = Path(__file__).parent / "frontend"
+STATIC_KEY = f"{DOMAIN}_static"  # hass.data: versioned base URL of the frontend files
+
+
+def _frontend_digest() -> str:
+    """Hash of every frontend file: part of their URL, so browsers never mix old and new panel, card and core."""
+    h = hashlib.sha256()
+    for path in sorted(FRONTEND_DIR.glob("*.js")):
+        h.update(path.name.encode() + b"\0" + path.read_bytes())
+    return h.hexdigest()[:12]
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     websocket.async_register(hass)
     # Registered once: entry reloads re-run async_setup_entry and aiohttp rejects duplicate routes.
-    await hass.http.async_register_static_paths(
-        [StaticPathConfig(STATIC_URL, str(Path(__file__).parent / "frontend"), False)]
-    )
+    # The content hash is in the path, not a query: the panel and the card import the core by a relative URL.
+    base = f"{STATIC_URL}/{await hass.async_add_executor_job(_frontend_digest)}"
+    hass.data[STATIC_KEY] = base
+    await hass.http.async_register_static_paths([StaticPathConfig(base, str(FRONTEND_DIR), False)])
+    # Dashboard card, loaded on every frontend page: no resource to add by hand.
+    frontend.add_extra_js_url(hass, f"{base}/shared-diet-card.js")
     return True
 
 
@@ -97,13 +109,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     store = hass.data[DOMAIN]
     entry.runtime_data = store
 
-    # The URL changes with the file's content: browsers otherwise keep an old panel against a newer server.
-    digest = await hass.async_add_executor_job(lambda: hashlib.sha256(PANEL_JS.read_bytes()).hexdigest()[:12])
     await async_register_panel(
         hass,
         webcomponent_name="shared-diet-panel",
         frontend_url_path=PANEL_URL,
-        module_url=f"{STATIC_URL}/shared-diet-panel.js?v={digest}",
+        module_url=f"{hass.data[STATIC_KEY]}/shared-diet-panel.js",
         sidebar_title="Dieta",
         sidebar_icon="mdi:food-apple",
         require_admin=False,

@@ -50,7 +50,7 @@ Le ricette sono piatti composti da ingredienti, salvati una volta sola e usabili
 
 Per ogni profilo vengono creati due sensori, dove `<nome>` è il nome del profilo in minuscolo (es. `luca`):
 
-- `sensor.<nome>_pasto_attuale`: nome del pasto in corso (vuoto se non c'è un pasto attuale). Attributi: `time`, `items`, `option`, `profile_id`, `person`.
+- `sensor.<nome>_pasto_attuale`: nome del pasto in corso (vuoto se non c'è un pasto attuale). Attributi: `time`, `items`, `option`, `profile_id`, `person`, `summary`, `minutes_until`.
 - `sensor.<nome>_prossimo_pasto`: nome del pasto con orario **più vicino all'ora attuale**, prima o dopo. Stesso schema di attributi.
 
 Il prossimo pasto si sceglie tra tutti i pasti con orario di oggi e il primo pasto con orario del primo giorno successivo che ne ha (fino a 7 giorni). Vince quello con la distanza minore dall'ora attuale; a parità vince quello futuro. I pasti di ieri non contano mai: dopo mezzanotte si guarda solo il giorno corrente. Esempio: pranzo 13:00, merenda 16:30; alle 13:20 il prossimo pasto è ancora il pranzo (20 minuti contro 3 ore e 10), dalle 14:45 la merenda.
@@ -60,6 +60,11 @@ Per un certo tempo dopo l'orario di un pasto, `pasto_attuale` e `prossimo_pasto`
 I pasti senza orario non compaiono mai come attuali o prossimi e non generano promemoria.
 
 Se un pasto contiene una ricetta, `items` riporta una voce per ricetta nel formato `Pancake: Farina 60 g, Uova 1 pz` (nome, poi gli ingredienti con le grammature della persona). La nota di preparazione non è negli attributi del sensore: appare in **Oggi**, sotto "Preparazione".
+
+Per i widget:
+
+- `summary`: una riga pronta, es. `Pranzo 13:00 - Pasta 80 g, Zucchine 200 g`; vuoto senza pasto.
+- `minutes_until`: minuti dall'ora attuale all'orario del pasto, negativi se è già iniziato; vuoto senza pasto. Cambia ogni minuto, quindi non viene salvato nello storico.
 
 ## Esempio di automazione
 
@@ -86,3 +91,34 @@ automation:
 ```
 
 Per un avviso prima dell'orario, usa il promemoria integrato del profilo (scheda **Profili**).
+
+## Widget
+
+### Card per le dashboard
+
+La card è disponibile in **Aggiungi card** (cerca "Dieta") subito dopo installazione o riavvio, senza aggiungere risorse a mano. Si configura in YAML:
+
+```yaml
+type: custom:shared-diet-card
+view: next        # next (prossimo pasto, predefinito) oppure today (tutti i pasti di oggi)
+profiles: [id1]   # facoltativo: solo questi profili (id in profile_id dei sensori); predefinito tutti
+```
+
+- `next`: il prossimo pasto con orario, il totale (se più persone condividono un alimento) e la porzione di ognuno.
+- `today`: i pasti del giorno come nella scheda **Oggi**, senza alternative, con il prossimo evidenziato.
+
+Si aggiorna da sola a ogni modifica e ogni minuto. È di sola lettura: un tocco apre il pannello **Dieta**. La lista della spesa non è nella card.
+
+### Widget sulla home del telefono (Companion app)
+
+Usa i widget della Companion app sui sensori, con l'attributo `summary`.
+
+Android, widget **Template**:
+
+```jinja
+{{ state_attr('sensor.luca_prossimo_pasto', 'summary') or 'Nessun pasto' }}
+{% set m = state_attr('sensor.luca_prossimo_pasto', 'minutes_until') %}
+{% if m is number and m > 0 %}tra {{ m }} min{% endif %}
+```
+
+iOS: widget **Details** (Dettagli), che mostra righe di testo da template: per esempio `{{ state_attr('sensor.luca_prossimo_pasto', 'summary') or 'Nessun pasto' }}` nella prima riga.

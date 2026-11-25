@@ -72,6 +72,33 @@ async def test_sensors_reflect_current_and_next(hass, freezer):
     assert nxt.attributes["items"] == ["Pasta integrale 80 g", "Olio (q.b.)"]
 
 
+async def test_sensor_widget_attributes(hass, freezer):
+    """summary and minutes_until for phone widgets: negative once the meal started, next day's meal counted across midnight."""
+    freezer.move_to(at(10, 30))
+    await _setup_luca(hass)
+    nxt = hass.states.get("sensor.luca_prossimo_pasto").attributes
+    assert nxt["summary"] == "Pranzo 13:00 - Pasta integrale 80 g, Olio (q.b.)"
+    assert nxt["minutes_until"] == 150
+    cur = hass.states.get("sensor.luca_pasto_attuale").attributes
+    assert cur["summary"] == "Colazione 07:30 - Latte 200 ml"
+    assert cur["minutes_until"] == -180
+
+    freezer.move_to(at(23, 0))
+    async_fire_time_changed(hass, at(23, 0))
+    await hass.async_block_till_done()
+    nxt = hass.states.get("sensor.luca_prossimo_pasto").attributes
+    assert nxt["summary"] == "Colazione 07:30 - Latte 200 ml"
+    assert nxt["minutes_until"] == 510  # tomorrow 07:30
+
+
+async def test_sensor_widget_attributes_without_meal(hass, freezer):
+    freezer.move_to(at(10, 30))
+    store = await _setup_entry(hass)
+    await _add_profile(hass, store, "Luca", [])
+    attrs = hass.states.get("sensor.luca_prossimo_pasto").attributes
+    assert attrs["summary"] is None and attrs["minutes_until"] is None
+
+
 async def test_reminder_sent_minutes_before(hass, freezer):
     calls = async_mock_service(hass, "notify", "mobile_app_x")
     freezer.move_to(at(10, 30))
