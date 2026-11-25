@@ -1,7 +1,7 @@
 /* Dieta: pannello laterale di Shared Diet. Web component vanilla, nessuna dipendenza. */
 
 const TABS = [
-  ["today", "Oggi"], ["week", "Settimana"], ["choices", "Scelte"], ["recipes", "Ricette"], ["shop", "Spesa"], ["profiles", "Profili"],
+  ["today", "Oggi"], ["week", "Settimana"], ["choices", "Scelte"], ["recipes", "Ricette"], ["shop", "Spesa"], ["list", "Lista"], ["profiles", "Profili"],
 ];
 const DAYS = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato", "Domenica"];
 const DAYS_SHORT = ["Lun", "Mar", "Mer", "Gio", "Ven", "Sab", "Dom"];
@@ -79,6 +79,11 @@ details p { white-space: pre-line; margin: 6px 0; }
 .shoprow { justify-content: space-between; flex-wrap: nowrap; }
 .shoprow label { margin: 0; min-width: 0; }
 .shoprow select { flex: 0 1 160px; }
+.lgroup { margin-top: 24px; padding-top: 12px; border-top: 2px solid var(--divider-color, #e0e0e0); }
+.lgroup h3 { margin: 0 0 8px; }
+.lcards { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+.lcard { min-height: 64px; text-align: left; white-space: normal; border-radius: 12px;
+  background: var(--card-background-color, #fff); box-shadow: 0 1px 3px rgba(0, 0, 0, .2); }
 .or { font-size: 12px; font-weight: 600; text-align: center; color: var(--secondary-text-color, #727272); }
 .chips { display: flex; gap: 4px; }
 .remind button.chip { flex: 0 0 auto; padding: 6px 10px; }
@@ -363,6 +368,10 @@ class SharedDietPanel extends HTMLElement {
     let cadence = "1w";
     try { cadence = localStorage.getItem("shared_diet.cadence") ?? "1w"; } catch { /* storage blocked */ }
     this._shop = { cadence: CADENCES.some(([k]) => k === cadence) ? cadence : "1w", off: new Set(), todo: "", preview: null, skip: new Set(), seq: 0, order: [] };
+    let listView = "check";
+    try { listView = localStorage.getItem("shared_diet.listview") === "card" ? "card" : "check"; } catch { /* storage blocked */ }
+    // Lista tab: live items of the chosen todo entity, each with its category (by item text).
+    this._todoList = { view: listView, entity: "", items: null, cats: new Map(), unsub: null };
     this.shadowRoot.addEventListener("click", (e) => this._onClick(e));
     this.shadowRoot.addEventListener("change", (e) => this._onChange(e));
     this.shadowRoot.addEventListener("input", (e) => this._onInput(e));
@@ -472,12 +481,14 @@ class SharedDietPanel extends HTMLElement {
 
   connectedCallback() {
     if (this._hass && !this._unsub) this._subscribe();
+    if (this._hass) this._listWatch();
     // Oggi has no inputs: re-render each minute so the next-meal highlight follows the clock.
     this._tick = setInterval(() => { if (this._view === "today" && !this._busy) this._render(); }, 60000);
   }
 
   disconnectedCallback() {
     clearInterval(this._tick);
+    this._listWatch(true);
     this._unsub?.then((unsub) => unsub?.(), () => {});
     this._unsub = null;
     document.getElementById("shared-diet-error")?.remove(); // don't leave it over other HA pages
@@ -522,6 +533,7 @@ class SharedDietPanel extends HTMLElement {
       return;
     }
     if (this._view === "shop") this._loadShop();
+    if (this._view === "list") this._listCats(true); // categories or overrides may have changed
     this._render();
   }
 
@@ -769,6 +781,77 @@ class SharedDietPanel extends HTMLElement {
     return todos.includes(this._shop.todo) ? this._shop.todo : todos[0] ?? "";
   }
 
+  // Follows the chosen todo entity while the Lista tab is shown; `stop` ends it (panel removed).
+  _listWatch(stop = false) {
+    const entity = !stop && this._view === "list" ? this._todo() : "";
+    if (entity === this._todoList.entity) return;
+    this._todoList.unsub?.then((unsub) => unsub?.(), () => {});
+    Object.assign(this._todoList, { entity, items: null, cats: new Map(), unsub: null });
+    if (!entity) return;
+    this._hass.callWS({ type: "shared_diet/get_category_order" }).then((r) => {
+      this._shop.order = r.order;
+      if (this._view === "list" && !this._busy) this._render();
+    }, () => {});
+    this._todoList.unsub = this._hass.connection
+      .subscribeMessage((ev) => this._onListItems(entity, ev.items), { type: "todo/item/subscribe", entity_id: entity })
+      .catch((err) => {
+        if (this._todoList.entity === entity) {
+          this._todoList.items = [];
+          this._flash(err?.message || "Impossibile leggere la lista");
+          this._render();
+        }
+        return () => {};
+      });
+  }
+
+  _onListItems(entity, items) {
+    if (entity !== this._todoList.entity) return;
+    this._todoList.items = items ?? [];
+    return this._listCats();
+  }
+
+  // Asks the server the category of item texts not seen yet (items typed by hand included); `all` asks again for every
+  // text, keeping the current groups on screen until the answer replaces them.
+  async _listCats(all = false) {
+    const { entity, cats } = this._todoList;
+    const texts = [...new Set((this._todoList.items ?? []).map((i) => i.summary))].filter((t) => all || !cats.has(t)).slice(0, 1000);
+    if (texts.length) {
+      try {
+        const res = await this._hass.callWS({ type: "shared_diet/categorize", texts });
+        if (entity !== this._todoList.entity) return; // another list since
+        const into = all ? (this._todoList.cats = new Map()) : cats;
+        texts.forEach((t, i) => into.set(t, res.categories[i]));
+      } catch (err) {
+        this._flash(err?.message || "Impossibile classificare la lista");
+      }
+    }
+    if (entity === this._todoList.entity && this._view === "list" && !this._busy) this._render();
+  }
+
+  // Ticks or unticks a todo item; shown at once, confirmed by the subscription.
+  async _toggleItem(uid) {
+    const item = this._todoList.items?.find((i) => i.uid === uid);
+    if (!item) return;
+    const before = item.status;
+    item.status = before === "completed" ? "needs_action" : "completed";
+    this._render();
+    try {
+      await this._hass.callService("todo", "update_item", { item: uid, status: item.status }, { entity_id: this._todoList.entity });
+    } catch (err) {
+      item.status = before;
+      this._flash(err?.message || "Operazione non riuscita");
+      this._render();
+    }
+  }
+
+  _todoSelect() {
+    const todos = Object.keys(this._hass.states).filter((e) => e.startsWith("todo."));
+    const todo = this._todo();
+    return todos.length
+      ? `<label class="row">Lista To-do <select data-ch="stodo">${todos.map((e) => `<option value="${esc(e)}"${e === todo ? " selected" : ""}>${esc(this._hass.states[e].attributes.friendly_name ?? e)}</option>`).join("")}</select></label>`
+      : `<p class="msg err">Nessuna lista To-do: creane una in Home Assistant.</p>`;
+  }
+
   _shopMsg() {
     const { from, to } = cadenceRange(this._shop.cadence);
     const ids = Object.keys(this._profiles);
@@ -909,6 +992,7 @@ class SharedDietPanel extends HTMLElement {
     if (d.tab) {
       this._view = d.tab;
       if (d.tab === "shop") this._loadShop();
+      this._listWatch();
       return this._render();
     }
     if (d.act === "fold") {
@@ -983,6 +1067,11 @@ class SharedDietPanel extends HTMLElement {
       case "catdown": return this._moveCategory(d.cid, 1);
       case "catdel": return this._deleteCategory(d.cid);
       case "catadd": return this._addCategory();
+      case "litem": return this._toggleItem(d.uid);
+      case "lview":
+        this._todoList.view = d.v;
+        try { localStorage.setItem("shared_diet.listview", d.v); } catch { /* storage blocked */ }
+        return this._render();
       case "wday": this._wday = Number(d.d); return this._render();
     }
     if (!d.ctx) return;
@@ -1088,7 +1177,14 @@ class SharedDietPanel extends HTMLElement {
         alt[d.f] = d.f === "qty" ? (el.value === "" ? null : Number(el.value)) : el.value;
         return this._markRecipeDirty();
       }
-      case "stodo": this._shop.todo = el.value; return;
+      case "stodo":
+        this._shop.todo = el.value;
+        if (this._view === "list") {
+          this._listWatch();
+          this._render();
+        }
+        return;
+      case "litem": return this._toggleItem(d.uid);
       case "scat": return this._setFoodCategory(Number(d.i), el.value);
       case "catname": return this._renameCategory(d.cid, el);
       case "sprof":
@@ -1196,7 +1292,7 @@ class SharedDietPanel extends HTMLElement {
     if (!this._profiles) return `<p class="muted">Caricamento…</p>`;
     const views = {
       today: () => this._vToday(), week: () => this._vWeek(),
-      choices: () => this._vChoices(), recipes: () => this._vRecipes(), shop: () => this._vShop(), profiles: () => this._vProfiles(),
+      choices: () => this._vChoices(), recipes: () => this._vRecipes(), shop: () => this._vShop(), list: () => this._vList(), profiles: () => this._vProfiles(),
     };
     return `<div id="notice">${this._noticeHtml()}</div>` + views[this._view]() + this._datalists();
   }
@@ -1390,13 +1486,10 @@ class SharedDietPanel extends HTMLElement {
 
   _vShop() {
     const ids = Object.keys(this._profiles);
-    const todos = Object.keys(this._hass.states).filter((e) => e.startsWith("todo."));
     const todo = this._todo();
     const profiles = ids.map((id) => `<label class="check"><input type="checkbox" role="switch" class="switch" data-ch="sprof" data-id="${esc(id)}"${
       this._shop.off.has(id) ? "" : " checked"}> ${esc(this._profiles[id].name)}</label>`).join("") || `<p class="muted">Nessun profilo.</p>`;
-    const todoSel = todos.length
-      ? `<label class="row">Lista To-do <select data-ch="stodo">${todos.map((e) => `<option value="${esc(e)}"${e === todo ? " selected" : ""}>${esc(this._hass.states[e].attributes.friendly_name ?? e)}</option>`).join("")}</select></label>`
-      : `<p class="msg err">Nessuna lista To-do: creane una in Home Assistant.</p>`;
+    const todoSel = this._todoSelect();
     const rows = this._shop.preview;
     const all = this._shopAll();
     const order = this._catOrder();
@@ -1438,6 +1531,34 @@ class SharedDietPanel extends HTMLElement {
         <div class="row"><input class="grow" id="newcat" maxlength="40" placeholder="Nuova categoria" value="${esc(this._shop.newCat ?? "")}">
           <button data-act="catadd">Aggiungi categoria</button></div>
       </details>`;
+  }
+
+  // The todo list grouped by category in this user's order, a clear gap between groups; ticked items go to the bottom.
+  _vList() {
+    const { items, view } = this._todoList;
+    const order = this._catOrder();
+    const names = Object.fromEntries(this._categories.map((c) => [c.id, c.name]));
+    const catOf = (i) => { const c = this._todoList.cats.get(i.summary); return order.includes(c) ? c : "altro"; };
+    const open = (items ?? []).filter((i) => i.status !== "completed");
+    const done = (items ?? []).filter((i) => i.status === "completed");
+    const check = (i) => `<label class="check"><input type="checkbox" data-ch="litem" data-uid="${esc(i.uid)}"${
+      i.status === "completed" ? " checked" : ""}> ${esc(i.summary)}</label>`;
+    const card = (i) => `<button class="lcard" data-act="litem" data-uid="${esc(i.uid)}" aria-label="Completa ${esc(i.summary)}">${esc(i.summary)}</button>`;
+    const groups = order.map((cid) => {
+      const group = open.filter((i) => catOf(i) === cid);
+      if (!group.length) return "";
+      const body = view === "card" ? `<div class="lcards">${group.map(card).join("")}</div>` : group.map(check).join("");
+      return `<section class="lgroup"><h3>${esc(names[cid])} <span class="muted">${group.length}</span></h3>${body}</section>`;
+    }).join("");
+    const viewBtn = (v, l) => `<button class="chip${view === v ? " on" : ""}" data-act="lview" data-v="${v}" aria-pressed="${view === v}">${l}</button>`;
+    const body = !this._todoList.entity ? ""
+      : items === null ? `<p class="muted">Caricamento…</p>`
+      : !items.length ? `<p class="muted">Lista vuota.</p>`
+      : (groups || `<p class="muted">Tutto preso.</p>`) +
+        (done.length ? `<details class="lgroup"><summary>Completati (${done.length})</summary>${done.map(check).join("")}</details>` : "");
+    return `<div class="page-head"><h2>Lista</h2><div class="chips">${viewBtn("check", "Checkbox")}${viewBtn("card", "Card")}</div></div>
+      ${this._todoSelect()}
+      ${body}`;
   }
 
   // One foldable card per recipe, like the Settimana meals; the name is always editable. Any number of recipes can be

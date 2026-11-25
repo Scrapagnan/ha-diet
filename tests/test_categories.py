@@ -6,7 +6,7 @@ import pytest
 from pytest_homeassistant_custom_component.common import async_mock_service
 
 from custom_components.shared_diet.const import DEFAULT_CATEGORIES, STORAGE_KEY
-from custom_components.shared_diet.model import category_for, effective_order, shopping_items
+from custom_components.shared_diet.model import category_for, effective_order, food_of, shopping_items
 from custom_components.shared_diet.store import MAX_CATEGORIES, DietStore, DuplicateNameError, LimitError
 
 from test_websocket import MONDAY, _user_client, call, item, meal, own_profile, setup_entry  # noqa: F401
@@ -44,6 +44,21 @@ def test_category_for_override_and_missing_categories():
     without_carne = [c for c in CATS if c["id"] != "carne"]
     assert category_for("Pollo", without_carne, {}) == "altro"  # guessed category deleted
     assert category_for("Pollo", CATS, {"pollo": "gone"}) == "carne"  # stale override ignored
+
+
+@pytest.mark.parametrize(
+    ("text", "food"),
+    [
+        ("Petto di pollo - 840 g", "Petto di pollo"),
+        ("Olio - 7.5 ml", "Olio"),
+        ("Pane - 2 ", "Pane"),  # unit-less row
+        ("Sale (q.b.)", "Sale"),
+        ("  Detersivo   piatti ", "Detersivo piatti"),  # typed by hand
+        ("Pasta - integrale", "Pasta - integrale"),  # not a quantity
+    ],
+)
+def test_food_of(text, food):
+    assert food_of(text) == food
 
 
 def test_effective_order():
@@ -171,6 +186,13 @@ async def test_two_users_see_their_own_order(hass, hass_ws_client, setup_entry):
     # The todo list is filled in category order, with the plain text.
     await call(bea, "shopping", **base, todo_entity_id="todo.spesa")
     assert [c.data["item"] for c in calls] == ["Pasta - 80 g", "Mele - 2 pz", "Pollo - 100 g"]
+
+
+async def test_categorize_todo_texts(hass, hass_ws_client, setup_entry):  # noqa: F811
+    c = await _user_client(hass, hass_ws_client)
+    assert (await call(c, "set_food_category", food="Sale", category_id="dispensa"))["success"]
+    resp = await call(c, "categorize", texts=["Petto di pollo - 840 g", "Sale (q.b.)", "Detersivo"])
+    assert resp["result"]["categories"] == ["carne", "dispensa", "altro"]
 
 
 async def test_category_command_errors(hass, hass_ws_client, setup_entry):  # noqa: F811

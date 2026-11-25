@@ -138,6 +138,16 @@ def category_for(food: str, categories: list[dict], overrides: dict[str, str], k
     return guess if guess in ids else FALLBACK_CATEGORY
 
 
+_QTY_SUFFIX = re.compile(r" - \d[\d.e+-]*(?: .*)?$")
+_NOTE_SUFFIX = re.compile(r" \([^()]*\)$")
+
+
+def food_of(text: str) -> str:
+    """Food name of a shopping row text ("Pollo - 300 g", "Sale (q.b.)", "Pane"); other text is returned unchanged."""
+    text = " ".join(text.split())
+    return _NOTE_SUFFIX.sub("", _QTY_SUFFIX.sub("", text)) or text
+
+
 def effective_order(saved: list[str], categories: list[dict]) -> list[str]:
     """A user's category order: their saved order on existing categories, then the others in list order."""
     ids = [c["id"] for c in categories]

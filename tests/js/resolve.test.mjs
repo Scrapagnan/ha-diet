@@ -1009,4 +1009,62 @@ const RECIPES = {
   assert.doesNotMatch(admin, /class="ro"/);
   assert.equal((admin.match(/data-act="delprofile"/g) ?? []).length, 3);
 }
+{
+  // Lista: the todo entity's live items grouped by category in the user's order, checkbox or card view; ticking completes
+  // the item in the todo entity; ticked items go under Completati.
+  const p = new SharedDietPanel();
+  p._render = () => {};
+  p._flash = (m) => { throw new Error(m); };
+  p._profiles = {};
+  p._categories = [{ id: "carne", name: "Carne" }, { id: "frutta", name: "Frutta" }, { id: "altro", name: "Altro" }];
+  let push, unsubbed = 0;
+  const ws = [], services = [];
+  p._hass = {
+    states: { "todo.spesa": { attributes: { friendly_name: "Spesa" } } },
+    connection: { subscribeMessage: async (cb, m) => { ws.push(plain(m)); push = cb; return () => { unsubbed++; }; } },
+    callWS: async (m) => {
+      ws.push(plain(m));
+      if (m.type === "shared_diet/get_category_order") return { order: ["frutta"] };
+      return { categories: m.texts.map((t) => (t.startsWith("Pollo") ? "carne" : t.startsWith("Mele") ? "frutta" : "altro")) };
+    },
+    callService: async (...a) => { services.push(plain(a)); },
+  };
+  p._view = "list";
+  p._listWatch();
+  await new Promise((r) => setTimeout(r));
+  assert.deepEqual(ws.find((m) => m.type === "todo/item/subscribe"), { type: "todo/item/subscribe", entity_id: "todo.spesa" });
+  assert.match(p._body(), /Caricamento/);
+  await push({ items: [
+    { uid: "1", summary: "Pollo - 300 g", status: "needs_action" },
+    { uid: "2", summary: "Mele - 2 pz", status: "needs_action" },
+    { uid: "3", summary: "Detersivo", status: "needs_action" },
+    { uid: "4", summary: "Sale (q.b.)", status: "completed" },
+  ] });
+  let html = p._body();
+  assert.deepEqual([...html.matchAll(/<h3>([^ <]+)/g)].map((m) => m[1]), ["Frutta", "Carne", "Altro"]); // saved order first
+  assert.match(html, /<section class="lgroup">/);
+  assert.match(html, /<summary>Completati \(1\)<\/summary><label class="check"><input type="checkbox" data-ch="litem" data-uid="4" checked>/);
+  assert.match(html, /aria-pressed="true">Checkbox/);
+  p._onClick({ target: { closest: () => ({ dataset: { act: "lview", v: "card" } }) } });
+  html = p._body();
+  assert.match(html, /class="lcard" data-act="litem" data-uid="2"/);
+  await p._toggleItem("2");
+  assert.deepEqual(services.at(-1), ["todo", "update_item", { item: "2", status: "completed" }, { entity_id: "todo.spesa" }]);
+  assert.match(p._body(), /Completati \(2\)/);
+  // A refused update goes back.
+  p._hass.callService = async () => { throw { message: "Non autorizzato" }; };
+  let flashed = "";
+  p._flash = (m) => { flashed = m; };
+  await p._toggleItem("1");
+  assert.equal(p._todoList.items[0].status, "needs_action");
+  assert.equal(flashed, "Non autorizzato");
+  // Only unseen texts are classified; leaving the tab ends the subscription.
+  const asked = ws.filter((m) => m.type === "shared_diet/categorize").length;
+  await push({ items: [...p._todoList.items, { uid: "5", summary: "Mele - 2 pz", status: "needs_action" }] });
+  assert.equal(ws.filter((m) => m.type === "shared_diet/categorize").length, asked);
+  p._view = "today";
+  p._listWatch();
+  await new Promise((r) => setTimeout(r));
+  assert.equal(unsubbed, 1);
+}
 console.log("resolve.test.mjs: all assertions passed");

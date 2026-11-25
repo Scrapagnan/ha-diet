@@ -15,7 +15,7 @@ from homeassistant.exceptions import Unauthorized
 from homeassistant.helpers import config_validation as cv
 
 from .const import DOMAIN
-from .model import fold_name, shopping_items
+from .model import category_for, fold_name, food_of, shopping_items
 from .store import (
     MAX_CATEGORIES,
     MAX_PROFILES,
@@ -490,6 +490,23 @@ async def ws_set_category_order(hass: HomeAssistant, connection: websocket_api.A
     connection.send_result(msg["id"], {"order": order})
 
 
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): "shared_diet/categorize",
+        vol.Required("texts"): _capped([_capped(str, MAX_ROW_LEN)], MAX_EXCLUDE),
+    }
+)
+@websocket_api.async_response
+async def ws_categorize(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    """Category of each todo item text (shopping rows or items typed by hand), for the panel's Lista tab."""
+    store = _store(hass, connection, msg)
+    if store is None:
+        return
+    data = store.snapshot()
+    categories = [category_for(food_of(t), data["categories"], data["food_categories"]) for t in msg["texts"]]
+    connection.send_result(msg["id"], {"categories": categories})
+
+
 COMMANDS = (
     ws_subscribe,
     ws_save_profile,
@@ -504,6 +521,7 @@ COMMANDS = (
     ws_set_food_category,
     ws_get_category_order,
     ws_set_category_order,
+    ws_categorize,
 )
 
 
