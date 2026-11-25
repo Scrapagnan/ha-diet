@@ -667,7 +667,9 @@ class SharedDietPanel extends HTMLElement {
     this._busy = true;
     this._render();
     try {
-      const done = (await fn()) || okText;
+      // Only a string is a message: a websocket reply ({}) passed through by `() => callWS(...)` is not.
+      const res = await fn();
+      const done = (typeof res === "string" && res) || okText;
       // Success goes to HA's own toast (auto-closing).
       if (done) this.dispatchEvent(new CustomEvent("hass-notification", {
         detail: { message: done, duration: done === okText ? 3000 : 6000 }, bubbles: true, composed: true }));

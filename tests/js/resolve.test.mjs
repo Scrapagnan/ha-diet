@@ -636,7 +636,8 @@ const RECIPES = {
   assert.match(html, /data-act="catup" data-cid="carne" aria-label="Sposta su" disabled/);
   const sent = [];
   p._hass.callWS = async (m) => { sent.push(plain(m)); return m.type === "shared_diet/set_category_order" ? { order: m.order } : {}; };
-  p.dispatchEvent = () => {};
+  const toasts = [];
+  p.dispatchEvent = (e) => toasts.push(e.detail.message);
   p._flash = (m) => { throw new Error(m); };
   await p._moveCategory("altro", -1);
   assert.deepEqual(sent.at(-1), { type: "shared_diet/set_category_order", order: ["carne", "frutta", "altro", "nuova"] });
@@ -681,6 +682,9 @@ const RECIPES = {
   assert.deepEqual(sent.at(-1), { type: "shared_diet/set_food_category", food: "Pollo", category_id: null });
   await p._renameCategory("carne", { value: " Macelleria " });
   assert.deepEqual(sent.at(-1), { type: "shared_diet/rename_category", category_id: "carne", name: "Macelleria" });
+  // Toasts carry text only: no toast for a category change, the fixed text for a rename (not the reply object).
+  assert.deepEqual(toasts.filter((t) => typeof t !== "string"), []);
+  assert.equal(toasts.at(-1), "Categoria rinominata");
 }
 {
   // Oggi: all profiles, grouped by meal name (case/spaces ignored); totals summed per food+unit and per recipe ingredient;
