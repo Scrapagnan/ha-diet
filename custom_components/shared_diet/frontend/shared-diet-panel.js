@@ -146,6 +146,9 @@ const addDays = (s, n) => { const d = parseIso(s); d.setDate(d.getDate() + n); r
 const splitQty = (s) => s.match(/^(.+?) - (\d[\d.,e+-]*(?: .*)?)$/) ?? s.match(/^(.+) \(([^()]*)\)$/);
 const cardText = (s) => { const m = splitQty(s); return m ? `${esc(m[1])}<span class="lqty">${esc(m[2])}</span>` : esc(s); };
 
+// Text fields a push must not re-render under the user's typing (see _onData and focusout).
+const TYPING = '[data-ch="catname"], #newcat, #newitem';
+
 const MAX_SHOP_QTY = 100000; // as the server's cap on an edited shopping quantity
 
 // Edited quantities to send with "Aggiungi alla lista": {row text: qty} for selected rows with a quantity whose field
@@ -419,11 +422,14 @@ class SharedDietPanel extends HTMLElement {
     this.shadowRoot.addEventListener("keydown", (e) => this._suggKey(e));
     this.shadowRoot.addEventListener("pointerdown", (e) => this._dragStart(e));
     this.shadowRoot.addEventListener("keydown", (e) => this._gripKey(e));
+    this.shadowRoot.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && e.target.id === "newitem" && !this._busy) this._addListItem();
+    });
     this.shadowRoot.addEventListener("focusout", (e) => {
       if (e.target.classList?.contains("food")) this._hideSugg();
       // Left a category field for nothing clickable in the panel: catch up on the pushes skipped while typing.
       // Towards a button, the action it runs renders instead (a render now would swallow the click).
-      if (this._shop.stale && !e.relatedTarget && e.target.matches?.('[data-ch="catname"], #newcat')) {
+      if (this._shop.stale && !e.relatedTarget && e.target.matches?.(TYPING)) {
         this._shop.stale = false;
         this._render();
       }
@@ -577,7 +583,7 @@ class SharedDietPanel extends HTMLElement {
         return;
       }
     }
-    if (this._view === "cats" && this.shadowRoot.activeElement?.matches?.('[data-ch="catname"], #newcat')) {
+    if (["cats", "list"].includes(this._view) && this.shadowRoot.activeElement?.matches?.(TYPING)) {
       this._shop.stale = true; // rendered when the field is left (focusout) or by the next action (_run)
       return;
     }
@@ -875,7 +881,7 @@ class SharedDietPanel extends HTMLElement {
     const view = this._view;
     this._hass.callWS({ type: "shared_diet/get_category_order" }).then((r) => {
       this._shop.order = r.order;
-      const typing = this.shadowRoot.activeElement?.matches?.('[data-ch="catname"], #newcat');
+      const typing = this.shadowRoot.activeElement?.matches?.(TYPING);
       if (this._view === view && !this._busy && !typing) this._render();
     }, () => {});
   }
@@ -901,7 +907,21 @@ class SharedDietPanel extends HTMLElement {
         this._flash(err?.message || "Impossibile classificare la lista");
       }
     }
-    if (entity === this._todoList.entity && this._view === "list" && !this._busy) this._render();
+    if (entity !== this._todoList.entity || this._view !== "list" || this._busy) return;
+    if (this.shadowRoot.activeElement?.matches?.(TYPING)) this._shop.stale = true; // rendered on focusout, not under typing
+    else this._render();
+  }
+
+  // An item typed by hand, outside the diet: added to the family list, the field kept focused for the next one.
+  _addListItem() {
+    const text = this.shadowRoot.getElementById("newitem")?.value.trim();
+    if (!text) return this._flash("Scrivi l'articolo da aggiungere");
+    this._todoList.newItem = text; // survives the re-renders; cleared only once added
+    this._focus = "#newitem";
+    return this._run(async () => {
+      await this._hass.callService("todo", "add_item", { item: text }, { entity_id: this._todoList.entity });
+      this._todoList.newItem = "";
+    }, "Articolo aggiunto");
   }
 
   // Ticks or unticks a todo item; shown at once, confirmed by the subscription.
@@ -1188,6 +1208,7 @@ class SharedDietPanel extends HTMLElement {
       case "alts": this._showAlts = !this._showAlts; return this._render();
       case "catdel": return this._deleteCategory(d.cid);
       case "catadd": return this._addCategory();
+      case "ladd": return this._addListItem();
       case "litem": return this._toggleItem(d.uid);
       case "lview":
         this._todoList.view = d.v;
@@ -1274,6 +1295,7 @@ class SharedDietPanel extends HTMLElement {
     if (["pfield", "meal", "item", "rfield", "ring", "rqty", "sqty"].includes(el.dataset.ch) && el.type !== "checkbox") this._onChange(e);
     if (el.classList.contains("food")) this._suggest(el);
     if (el.id === "newcat") this._shop.newCat = el.value;
+    if (el.id === "newitem") this._todoList.newItem = el.value;
   }
 
   _onChange(e) {
@@ -1681,8 +1703,11 @@ class SharedDietPanel extends HTMLElement {
       : !items.length ? `<p class="muted">Lista vuota.</p>`
       : (groups || `<p class="muted">Tutto preso.</p>`) +
         (done.length ? `<details class="lgroup" id="done"${doneOpen ? " open" : ""}><summary>Completati (${done.length})</summary>${listHtml(done)}</details>` : "");
+    const add = !this._todoList.entity ? "" : `<div class="row"><input class="grow" id="newitem" maxlength="255"
+        placeholder="Articolo fuori dieta (es. Detersivo)" aria-label="Nuovo articolo" value="${esc(this._todoList.newItem ?? "")}">
+        <button data-act="ladd">Aggiungi</button></div>`;
     return `<div class="page-head"><h2>Lista</h2><div class="chips">${viewBtn("check", "Checkbox")}${viewBtn("card", "Card")}</div></div>
-      ${body}`;
+      ${add}${body}`;
   }
 
   // One foldable card per recipe, like the Settimana meals; the name is always editable. Any number of recipes can be
