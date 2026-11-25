@@ -37,6 +37,7 @@ button.primary { background: var(--primary-color, #03a9f4); color: var(--text-pr
 button.danger { color: var(--error-color, #db4437); }
 button.icon { background: none; border: 0; font-size: 22px; padding: 4px 8px; min-height: 0; color: inherit; }
 button.icon.danger { color: var(--error-color, #db4437); }
+.state { min-width: 9ch; } /* fits "Disattivo": toggling the switch must not resize the name field */
 button.add { width: 100%; border-style: dashed; margin: 8px 0; }
 button.chip { flex: 1 1 0; min-width: 0; padding: 6px 0; }
 button.chip.on { background: var(--primary-color, #03a9f4); color: var(--text-primary-color, #fff); border-color: transparent; }
@@ -1847,7 +1848,7 @@ class SharedDietPanel extends HTMLElement {
       // Oggi and Spesa) and, at the far right, delete.
       const off = this._profiles[id].disabled;
       const admin = this._hass.user?.is_admin
-        ? `<label class="check"><input type="checkbox" role="switch" class="switch" data-ch="pactive" ${pid}${off ? "" : " checked"}> ${off ? "Disattivo" : "Attivo"}</label>
+        ? `<label class="check"><input type="checkbox" role="switch" class="switch" data-ch="pactive" ${pid}${off ? "" : " checked"}> <span class="state">${off ? "Disattivo" : "Attivo"}</span></label>
           <button class="icon danger" data-act="delprofile" ${pid} aria-label="Elimina profilo" title="Elimina profilo">${TRASH}</button>`
         : "";
       const fields = `<div class="sub-row"><label class="check grow">Nome <input class="grow" value="${esc(p.name)}" data-ch="pfield" ${pid} data-f="name"></label>${admin}</div>
