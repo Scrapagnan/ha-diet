@@ -64,12 +64,15 @@ class MealSensor(SensorEntity):
     @property
     def extra_state_attributes(self) -> dict:
         meal = self._meal
+        items = [format_item(i) for i in meal["items"]] if meal else []
         return {
             "time": meal["time"] if meal else None,
-            "items": [format_item(i) for i in meal["items"]] if meal else [],
+            "items": items,
             "option": meal["option"] if meal else None,
             "profile_id": self._profile_id,
             "person": self._person(),
+            # Phone widgets (Companion app): one ready line.
+            "summary": " - ".join(filter(None, [f"{meal['name']} {meal['time']}", ", ".join(items)])) if meal else None,
         }
 
 

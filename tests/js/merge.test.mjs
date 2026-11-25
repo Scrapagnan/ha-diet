@@ -1,13 +1,9 @@
 // Run: node tests/js/merge.test.mjs. Loads mergeProfiles from the panel source without a browser.
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import vm from "node:vm";
-import { fileURLToPath } from "node:url";
+import { loadPanel } from "./load.mjs";
 
-const panel = fileURLToPath(new URL("../../custom_components/shared_diet/frontend/shared-diet-panel.js", import.meta.url));
 const ctx = { HTMLElement: class {}, customElements: { get: () => undefined, define() {} } };
-vm.createContext(ctx);
-const { mergeProfiles } = vm.runInContext(`${readFileSync(panel, "utf8")}\n;({ mergeProfiles });`, ctx);
+const { mergeProfiles } = loadPanel(ctx, ["mergeProfiles"]);
 
 // Results are built in the vm realm; round-trip them so deepStrictEqual compares plain objects.
 const plain = (v) => JSON.parse(JSON.stringify(v));
