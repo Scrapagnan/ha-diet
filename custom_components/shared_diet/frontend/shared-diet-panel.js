@@ -1457,7 +1457,7 @@ class SharedDietPanel extends HTMLElement {
     const all = !Array.isArray(m.shared_with);
     const box = (pid, label, on) => `<label class="check"><input type="checkbox" data-ch="share" ${at} data-pid="${esc(pid)}"${
       on ? " checked" : ""}> ${esc(label)}</label>`;
-    const share = others.length ? `<div class="sub-row"><span class="muted">Condiviso con</span>${box("", "Tutti", all)}${
+    const share = others.length || !all ? `<div class="sub-row"><span class="muted">Condiviso con</span>${box("", "Tutti", all)}${
       all ? "" : others.map((p) => box(p.id, p.name, m.shared_with.includes(p.id))).join("")}</div>` : "";
     return `<section class="card">${head}
       ${share}

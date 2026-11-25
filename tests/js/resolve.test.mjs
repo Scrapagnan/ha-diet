@@ -877,5 +877,20 @@ const RECIPES = {
   const partial = card({ ...p._draft.week[0][0], shared_with: ["c"] });
   assert.match(partial, /data-pid=""> Tutti[\s\S]*data-pid="b"> Bruno[\s\S]*data-pid="c" checked> Carla/);
   assert.doesNotMatch(partial, /data-pid="a"/); // not oneself
+  // Alone: no row for "Tutti", but a meal still unshared keeps it so it can be reset.
+  p._profiles = { a: p._profiles.a };
+  assert.doesNotMatch(card({ ...p._draft.week[0][0] }), /Condiviso con/);
+  assert.match(card({ ...p._draft.week[0][0], shared_with: [] }), /Condiviso con[\s\S]*data-pid=""> Tutti/);
+  // Change handler: Tutti off -> [], tick/untick a profile, Tutti on -> field removed.
+  p._profiles = { a: mk("a", "Anna"), b: mk("b", "Bruno"), c: mk("c", "Carla") };
+  p._draft = JSON.parse(JSON.stringify(p._profiles.a));
+  p._busy = false;
+  p._render = () => {};
+  const toggle = (pid, checked) => p._onChange({ target: { checked, dataset: { ch: "share", ctx: "w0", i: "0", pid } } });
+  const sw = () => plain(p._draft.week[0][0].shared_with);
+  toggle("", false); assert.deepEqual(sw(), []);
+  toggle("b", true); toggle("c", true); toggle("b", true); assert.deepEqual(sw(), ["c", "b"]);
+  toggle("c", false); assert.deepEqual(sw(), ["b"]);
+  toggle("", true); assert.equal("shared_with" in p._draft.week[0][0], false);
 }
 console.log("resolve.test.mjs: all assertions passed");

@@ -80,8 +80,7 @@ async def test_delete_profile_removes_it_from_shared_with(hass):
     after = s.profiles[kept["id"]]
     assert [m["shared_with"] for m in after["week"]["0"]] == [[other["id"]], None, []]
     assert after["exceptions"]["2026-11-18"][0]["shared_with"] == []
-    assert after["rev"] == kept["rev"] + 1
-    assert s.profiles[other["id"]]["rev"] == other["rev"]  # untouched profile keeps its rev
+    assert after["rev"] == kept["rev"]  # no rev bump: open drafts keep saving without a conflict
 
 
 async def test_raising_listener_does_not_block_others_or_fail_save(hass):
