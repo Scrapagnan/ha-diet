@@ -959,8 +959,8 @@ class SharedDietPanel extends HTMLElement {
     if (!grip || this._busy || e.button > 0) return;
     e.preventDefault();
     const row = grip.closest(".catrow"), list = row.parentElement;
-    grip.setPointerCapture?.(e.pointerId);
     row.classList.add("dragging");
+    // Listened on window, not captured on the grip: moving the row in the DOM drops pointer capture.
     const move = (ev) => {
       for (const other of list.children) {
         if (other === row) continue;
@@ -971,16 +971,16 @@ class SharedDietPanel extends HTMLElement {
       }
     };
     const end = () => {
-      grip.removeEventListener("pointermove", move);
-      grip.removeEventListener("pointerup", end);
-      grip.removeEventListener("pointercancel", end);
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
       row.classList.remove("dragging");
       const order = [...list.children].map((r) => r.dataset.cid);
       if (order.join() !== this._catOrder().join()) this._saveOrder(order);
     };
-    grip.addEventListener("pointermove", move);
-    grip.addEventListener("pointerup", end);
-    grip.addEventListener("pointercancel", end);
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
   }
 
   _gripKey(e) {
