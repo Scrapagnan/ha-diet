@@ -36,6 +36,7 @@ button:disabled { opacity: 0.5; cursor: default; }
 button.primary { background: var(--primary-color, #03a9f4); color: var(--text-primary-color, #fff); border-color: transparent; }
 button.danger { color: var(--error-color, #db4437); }
 button.icon { background: none; border: 0; font-size: 22px; padding: 4px 8px; min-height: 0; color: inherit; }
+button.icon.danger { color: var(--error-color, #db4437); }
 button.add { width: 100%; border-style: dashed; margin: 8px 0; }
 button.chip { flex: 1 1 0; min-width: 0; padding: 6px 0; }
 button.chip.on { background: var(--primary-color, #03a9f4); color: var(--text-primary-color, #fff); border-color: transparent; }
@@ -1842,7 +1843,14 @@ class SharedDietPanel extends HTMLElement {
           `<option value="${esc(v)}"${v === current ? " selected" : ""}>${esc(v)}</option>`).join("")}</select>`;
       };
       const dirty = id === this._profileId && this._dirty;
-      const fields = `<label class="sub-row">Nome <input value="${esc(p.name)}" data-ch="pfield" ${pid} data-f="name"></label>
+      // Admins: on the name row, the active switch (disabled = week and choices frozen, no reminders, hidden from
+      // Oggi and Spesa) and, at the far right, delete.
+      const off = this._profiles[id].disabled;
+      const admin = this._hass.user?.is_admin
+        ? `<label class="check"><input type="checkbox" role="switch" class="switch" data-ch="pactive" ${pid}${off ? "" : " checked"}> ${off ? "Disattivo" : "Attivo"}</label>
+          <button class="icon danger" data-act="delprofile" ${pid} aria-label="Elimina profilo" title="Elimina profilo">${TRASH}</button>`
+        : "";
+      const fields = `<div class="sub-row"><label class="check grow">Nome <input class="grow" value="${esc(p.name)}" data-ch="pfield" ${pid} data-f="name"></label>${admin}</div>
         <label class="check"><input type="checkbox" role="switch" class="switch" data-ch="pfield" ${pid} data-f="rem.on"${p.reminder.enabled ? " checked" : ""}> Promemoria</label>
         ${p.reminder.enabled ? `<label class="sub-row">Minuti prima del pasto
           <input type="number" min="0" max="240" step="1" value="${esc(p.reminder.minutes)}" data-ch="pfield" ${pid} data-f="rem.min"></label>
@@ -1851,16 +1859,10 @@ class SharedDietPanel extends HTMLElement {
       const editable = this._canEdit(this._profiles[id]);
       // Profiles are created per HA user; only an admin may delete one. While its user exists it comes back empty
       // at the next restart or user addition.
-      const buttons = (editable ? `<button class="primary" data-act="save" ${pid}${dirty ? "" : " hidden"}${this._busy ? " disabled" : ""}>Salva</button>` : "")
-        + (this._hass.user?.is_admin ? `<button class="danger" data-act="delprofile" ${pid}>Elimina profilo</button>` : "");
-      // Disabled: week and choices frozen, no reminders, hidden from Oggi and Spesa. Only an admin switches it.
-      const off = this._profiles[id].disabled;
-      const active = this._hass.user?.is_admin
-        ? `<label class="check"><input type="checkbox" role="switch" class="switch" data-ch="pactive" ${pid}${off ? "" : " checked"}> Profilo attivo</label>`
-        : off ? `<p class="muted">Profilo disabilitato</p>` : "";
+      const buttons = editable ? `<button class="primary" data-act="save" ${pid}${dirty ? "" : " hidden"}${this._busy ? " disabled" : ""}>Salva</button>` : "";
       return `<section class="card">
         ${p.user_id ? "" : `<p class="muted">Nessun utente collegato</p>`}
-        ${active}
+        ${off && !this._hass.user?.is_admin ? `<p class="muted">Profilo disabilitato</p>` : ""}
         ${this._ro(fields, !editable)}
         ${buttons ? `<div class="row">${buttons}</div>` : ""}
       </section>`;
