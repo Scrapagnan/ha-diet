@@ -58,9 +58,17 @@ def test_shopping_rows_carry_food_and_category():
     p = {"week": week, "exceptions": {}, "choices": {"defaults": {}, "dates": {}}}
     rows = shopping_items([p], MONDAY, MONDAY, {}, CATS, {"sale": "dispensa"})
     assert rows == [
-        {"text": "Pollo - 100 g", "food": "Pollo", "category": "carne"},
-        {"text": "Sale (q.b.)", "food": "Sale", "category": "dispensa"},
+        {"text": "Pollo - 100 g", "food": "Pollo", "category": "carne", "manual": False},
+        {"text": "Sale (q.b.)", "food": "Sale", "category": "dispensa", "manual": True},
     ]
+
+
+def test_shopping_manual_flag_uses_server_folding():
+    week = {str(d): [] for d in range(7)}
+    week["0"] = [meal("l", "13:00", [[{"alts": [item("Weißwurst", 100.0)]}]])]
+    p = {"week": week, "exceptions": {}, "choices": {"defaults": {}, "dates": {}}}
+    [row] = shopping_items([p], MONDAY, MONDAY, {}, CATS, {"weisswurst": "carne"})  # casefold: ß -> ss
+    assert row["category"] == "carne" and row["manual"] is True
 
 
 # --- store -----------------------------------------------------------------------------------------------------
@@ -151,7 +159,7 @@ async def test_two_users_see_their_own_order(hass, hass_ws_client, setup_entry):
     # Override is the house's: Bea moves Mele and Anna sees it too.
     assert (await call(bea, "set_food_category", food="mele", category_id="altro"))["success"]
     rows = (await call(anna, "shopping", **base))["result"]["items"]
-    assert rows[-1] == {"text": "Mele - 2 pz", "food": "Mele", "category": "altro"}
+    assert rows[-1] == {"text": "Mele - 2 pz", "food": "Mele", "category": "altro", "manual": True}
 
     # A new category goes last for everyone.
     new = (await call(bea, "create_category", name=" Carni bianche "))["result"]["category"]

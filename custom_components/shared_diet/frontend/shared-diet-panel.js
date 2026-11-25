@@ -347,7 +347,6 @@ class SharedDietPanel extends HTMLElement {
     this._profiles = null; // last subscribe payload
     this._recipes = {}; // recipe book from the same payload, by id
     this._categories = []; // the house's shopping categories [{id, name}], same payload
-    this._foodCats = {}; // folded food name -> category id chosen by hand, same payload
     this._loadError = "";
     this._profileId = null;
     this._draft = null; // editable copy of the selected profile
@@ -486,7 +485,7 @@ class SharedDietPanel extends HTMLElement {
 
   _subscribe() {
     this._unsub = this._hass.connection
-      .subscribeMessage((msg) => this._onData(msg.profiles, msg.recipes, msg.categories, msg.food_categories), { type: "shared_diet/subscribe" })
+      .subscribeMessage((msg) => this._onData(msg.profiles, msg.recipes, msg.categories), { type: "shared_diet/subscribe" })
       .catch((err) => {
         this._loadError = err?.message || "Impossibile caricare i dati";
         this._render();
@@ -495,11 +494,10 @@ class SharedDietPanel extends HTMLElement {
   }
 
   // Latest server data. Unsaved edits to the selected profile survive; a deleted profile resets the selection.
-  _onData(profiles, recipes, categories, foodCats) {
+  _onData(profiles, recipes, categories) {
     this._profiles = profiles;
     this._recipes = recipes ?? {};
     this._categories = categories ?? [];
-    this._foodCats = foodCats ?? {};
     if (!profiles[this._profileId]) {
       this._profileId = this._ownId() ?? Object.keys(profiles)[0] ?? null;
       this._draft = null;
@@ -884,9 +882,9 @@ class SharedDietPanel extends HTMLElement {
     return this._run(() => this._hass.callWS({ type: "shared_diet/set_food_category", food: row.food, category_id: id || null }));
   }
 
-  // The row's hand-picked category, "" when it is automatic.
+  // The row's hand-picked category, "" when it is automatic (the server folds names, so it tells).
   _manualCat(row) {
-    return own(this._foodCats, foldText(row.food)) ? row.category : "";
+    return row.manual ? row.category : "";
   }
 
   // Meal list addressed by ctx: "w<weekday>" (weekly schema).

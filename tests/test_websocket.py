@@ -232,7 +232,7 @@ async def test_shopping_adds_to_todo(hass, client):
         profile_ids=None,
         todo_entity_id="todo.spesa",
     )
-    assert resp["result"]["items"] == [{"text": "Pasta - 80 g", "food": "Pasta", "category": "pasta_cereali"}]
+    assert resp["result"]["items"] == [{"text": "Pasta - 80 g", "food": "Pasta", "category": "pasta_cereali", "manual": False}]
     assert len(calls) == 1
     assert calls[0].data == {"entity_id": "todo.spesa", "item": "Pasta - 80 g"}
 

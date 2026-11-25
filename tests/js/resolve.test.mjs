@@ -629,7 +629,7 @@ const RECIPES = {
   assert.deepEqual(heads, ["Carne", "Frutta", "Altro"]);
   assert.match(html, /data-ch="sitem" data-i="2"[^]*data-ch="sitem" data-i="3"/); // Orata after Zzz, in Altro
   assert.match(html, /data-ch="scat" data-i="1" aria-label="Categoria di Pollo"><option value="">Automatica<\/option><option value="carne">/);
-  p._foodCats = { pollo: "carne" }; // hand-picked: selected by name
+  p._shop.preview[1].manual = true; // hand-picked: selected by name
   assert.match(p._body(), /aria-label="Categoria di Pollo"><option value="">Automatica<\/option><option value="carne" selected>/);
   assert.match(html, /data-act="catdel" data-cid="nuova"/);
   assert.doesNotMatch(html, /data-act="catdel" data-cid="altro"/);
@@ -669,7 +669,7 @@ const RECIPES = {
   const realLoad = p._loadShop;
   p._loadShop = () => { loads++; };
   p.shadowRoot.activeElement = { matches: (sel) => sel.includes("#newcat") };
-  p._onData({}, {}, p._categories, p._foodCats);
+  p._onData({}, {}, p._categories);
   assert.equal(loads, 0);
   assert.equal(p._shop.stale, true);
   p.shadowRoot.activeElement = null;

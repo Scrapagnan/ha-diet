@@ -154,7 +154,8 @@ def shopping_items(
     categories: list[dict] | None = None,
     overrides: dict[str, str] | None = None,
 ) -> list[dict]:
-    """Aggregated shopping rows {text, food, category} over [start, end] (inclusive), sorted by normalized food name then unit."""
+    """Aggregated shopping rows {text, food, category, manual} over [start, end] (inclusive), sorted by normalized food
+    name then unit. `manual`: the category is the food's override, not a guess from its name."""
     totals: dict[tuple[str, str], tuple[str, float]] = {}  # (food, unit) -> (first spelling, sum)
     untimed: dict[str, tuple[str, str]] = {}  # food -> (first spelling, note)
     day = start
@@ -181,8 +182,14 @@ def shopping_items(
     ]
     categories = DEFAULT_CATEGORIES if categories is None else categories
     overrides = overrides or {}
+    ids = {c["id"] for c in categories}
     return [
-        {"text": text, "food": name, "category": category_for(name, categories, overrides)}
+        {
+            "text": text,
+            "food": name,
+            "category": category_for(name, categories, overrides),
+            "manual": overrides.get(fold_name(name)) in ids,
+        }
         for _, _, name, text in sorted(rows)
     ]
 
