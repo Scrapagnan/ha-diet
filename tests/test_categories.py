@@ -3,7 +3,6 @@
 from datetime import date
 
 import pytest
-from pytest_homeassistant_custom_component.common import async_mock_service
 
 from custom_components.shared_diet.const import DEFAULT_CATEGORIES, STORAGE_KEY
 from custom_components.shared_diet.model import category_for, effective_order, food_of, shopping_items
@@ -155,7 +154,6 @@ async def test_order_change_does_not_push(hass):
 
 
 async def test_two_users_see_their_own_order(hass, hass_ws_client, setup_entry):  # noqa: F811
-    calls = async_mock_service(hass, "todo", "add_item")
     anna = await _user_client(hass, hass_ws_client, "Anna")
     bea = await _user_client(hass, hass_ws_client, "Bea")
     profile = own_profile(anna)
@@ -183,9 +181,9 @@ async def test_two_users_see_their_own_order(hass, hass_ws_client, setup_entry):
     assert (await call(bea, "set_food_category", food="Pollo", category_id=new["id"]))["success"]
     assert texts(await call(anna, "shopping", **base)) == ["Pasta - 80 g", "Mele - 2 pz", "Pollo - 100 g"]
 
-    # The todo list is filled in category order, with the plain text.
-    await call(bea, "shopping", **base, todo_entity_id="todo.spesa")
-    assert [c.data["item"] for c in calls] == ["Pasta - 80 g", "Mele - 2 pz", "Pollo - 100 g"]
+    # The family list is filled in the caller's category order, with the plain text.
+    await call(anna, "shopping", **base, add=True)
+    assert [i["summary"] for i in anna.store.shopping] == ["Pasta - 80 g", "Mele - 2 pz", "Pollo - 100 g"]
 
 
 async def test_categorize_todo_texts(hass, hass_ws_client, setup_entry):  # noqa: F811

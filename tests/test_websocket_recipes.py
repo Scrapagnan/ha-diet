@@ -1,7 +1,6 @@
 """Websocket API for the shared recipe book: non-admin access, validation, behaviour."""
 
 import pytest
-from pytest_homeassistant_custom_component.common import async_mock_service
 
 from test_websocket import MONDAY, call, client, meal, own_profile, setup_entry  # noqa: F401
 
@@ -228,7 +227,6 @@ async def test_subscribe_pushes_recipes(client):
 
 
 async def test_shopping_expands_recipe_ingredients(hass, client):
-    calls = async_mock_service(hass, "todo", "add_item")
     recipe = await _create_recipe(
         client,
         ingredients=[
@@ -246,7 +244,7 @@ async def test_shopping_expands_recipe_ingredients(hass, client):
         start=MONDAY.isoformat(),
         end=MONDAY.isoformat(),
         profile_ids=None,
-        todo_entity_id="todo.spesa",
+        add=True,
     )
     assert [r["text"] for r in resp["result"]["items"]] == ["Uova - 1 pz", "Farina - 60 g"]  # latticini_uova first
-    assert [c.data["item"] for c in calls] == ["Uova - 1 pz", "Farina - 60 g"]
+    assert [i["summary"] for i in hass.data["shared_diet"].shopping] == ["Uova - 1 pz", "Farina - 60 g"]

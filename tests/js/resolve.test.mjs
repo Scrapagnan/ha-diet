@@ -592,20 +592,27 @@ const RECIPES = {
   p._onClick({ target: { closest: () => ({ dataset: { act: "shopall" } }) } }); // on -> all off
   assert.equal(p._shopAll(), "false");
   assert.match(p._body(), /data-act="shop" disabled/);
-  // The add call excludes skipped rows; no todo entity = preview only.
+  // The add call excludes skipped rows, then the Lista tab shows the family list; without `add` it is a preview.
+  assert.doesNotMatch(p._body(), /data-ch="stodo"/); // no todo entity to pick
   const sent = [];
   const OLIO = { text: "Olio - 10 ml", food: "Olio", category: "condimenti" };
   p._hass.callWS = async (m) => { sent.push(m); return { items: [OLIO] }; };
+  p._hass.connection = { subscribeMessage: async () => () => {} };
   p._shop.skip = new Set(["Pasta - 80 g"]);
   p.dispatchEvent = () => {};
   p._flash = (m) => { throw new Error(m); };
   await p._runShop();
   assert.deepEqual(plain(sent[0]).exclude, ["Pasta - 80 g"]);
-  assert.equal(sent[0].todo_entity_id, "todo.spesa");
+  assert.equal(sent[0].add, true);
+  assert.equal(p._view, "list");
+  assert.equal(p._todoList.entity, "todo.lista_della_spesa"); // the integration's own list
+  p._view = "shop";
+  p._listWatch();
+  sent.length = 0;
   await p._loadShop();
-  assert.equal("todo_entity_id" in sent[1], false);
+  assert.equal("add" in sent[0], false);
   assert.deepEqual(plain(p._shop.preview), [OLIO]);
-  assert.equal(sent[2].type, "shared_diet/get_category_order"); // loaded with every preview
+  assert.equal(sent[1].type, "shared_diet/get_category_order"); // loaded with every preview
 }
 {
   // Spesa grouped by category in the user's order (saved order first, unknown ids dropped, the rest in list order);
@@ -1024,7 +1031,8 @@ const RECIPES = {
   let push, unsubbed = 0;
   const ws = [], services = [];
   p._hass = {
-    states: { "todo.spesa": { attributes: { friendly_name: "Spesa" } } },
+    states: {},
+    entities: { "todo.spesa": { entity_id: "todo.spesa", platform: "shared_diet" }, "todo.other": { entity_id: "todo.other", platform: "local_todo" } },
     connection: { subscribeMessage: async (cb, m) => { ws.push(plain(m)); push = cb; return () => { unsubbed++; }; } },
     callWS: async (m) => {
       ws.push(plain(m));

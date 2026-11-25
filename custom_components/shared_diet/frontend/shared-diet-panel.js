@@ -368,10 +368,10 @@ class SharedDietPanel extends HTMLElement {
     this._wday = weekday(today); // Settimana and Scelte views
     let cadence = "1w";
     try { cadence = localStorage.getItem("shared_diet.cadence") ?? "1w"; } catch { /* storage blocked */ }
-    this._shop = { cadence: CADENCES.some(([k]) => k === cadence) ? cadence : "1w", off: new Set(), todo: "", preview: null, skip: new Set(), seq: 0, order: [] };
+    this._shop = { cadence: CADENCES.some(([k]) => k === cadence) ? cadence : "1w", off: new Set(), preview: null, skip: new Set(), seq: 0, order: [] };
     let listView = "check";
     try { listView = localStorage.getItem("shared_diet.listview") === "card" ? "card" : "check"; } catch { /* storage blocked */ }
-    // Lista tab: live items of the chosen todo entity, each with its category (by item text).
+    // Lista tab: live items of the family todo entity, each with its category (by item text).
     this._todoList = { view: listView, entity: "", items: null, cats: new Map(), unsub: null };
     this.shadowRoot.addEventListener("click", (e) => this._onClick(e));
     this.shadowRoot.addEventListener("change", (e) => this._onChange(e));
@@ -779,12 +779,13 @@ class SharedDietPanel extends HTMLElement {
     }, "Ricetta eliminata");
   }
 
+  // The family shopping list: the integration's own todo entity (found by platform, in case it was renamed).
   _todo() {
-    const todos = Object.keys(this._hass.states).filter((e) => e.startsWith("todo."));
-    return todos.includes(this._shop.todo) ? this._shop.todo : todos[0] ?? "";
+    const own = Object.values(this._hass.entities ?? {}).find((e) => e.platform === "shared_diet" && e.entity_id.startsWith("todo."));
+    return own?.entity_id ?? "todo.lista_della_spesa";
   }
 
-  // Follows the chosen todo entity while the Lista tab is shown; `stop` ends it (panel removed).
+  // Follows the family todo entity while the Lista tab is shown; `stop` ends it (panel removed).
   _listWatch(stop = false) {
     const entity = !stop && this._view === "list" ? this._todo() : "";
     if (entity === this._todoList.entity) return;
@@ -847,14 +848,6 @@ class SharedDietPanel extends HTMLElement {
     }
   }
 
-  _todoSelect() {
-    const todos = Object.keys(this._hass.states).filter((e) => e.startsWith("todo."));
-    const todo = this._todo();
-    return todos.length
-      ? `<label class="row">Lista To-do <select data-ch="stodo">${todos.map((e) => `<option value="${esc(e)}"${e === todo ? " selected" : ""}>${esc(this._hass.states[e].attributes.friendly_name ?? e)}</option>`).join("")}</select></label>`
-      : `<p class="msg err">Nessuna lista To-do: creane una in Home Assistant.</p>`;
-  }
-
   _shopMsg() {
     const { from, to } = cadenceRange(this._shop.cadence);
     const ids = Object.keys(this._profiles);
@@ -898,15 +891,16 @@ class SharedDietPanel extends HTMLElement {
     return !rows.length || off === rows.length ? "false" : off ? "mixed" : "true";
   }
 
+  // Adds the selected rows to the family list, then shows it (Lista tab).
   _runShop() {
-    const todo = this._todo();
-    if (!todo) return this._flash("Nessuna lista To-do disponibile");
     if (!this._shop.preview || this._shop.failed) return;
     const exclude = (this._shop.preview ?? []).map((r) => r.text).filter((t) => this._shop.skip.has(t));
     if (this._shopAll() === "false") return this._flash("Nessun alimento selezionato");
     return this._run(async () => {
-      await this._hass.callWS({ ...this._shopMsg(), todo_entity_id: todo, exclude });
-    }, "Lista della spesa aggiornata");
+      await this._hass.callWS({ ...this._shopMsg(), add: true, exclude });
+      this._view = "list";
+      this._listWatch();
+    }, "Aggiunti alla lista della spesa");
   }
 
   // This user's category order: the saved one on existing categories, then the rest in list order (as the server does).
@@ -1180,13 +1174,6 @@ class SharedDietPanel extends HTMLElement {
         alt[d.f] = d.f === "qty" ? (el.value === "" ? null : Number(el.value)) : el.value;
         return this._markRecipeDirty();
       }
-      case "stodo":
-        this._shop.todo = el.value;
-        if (this._view === "list") {
-          this._listWatch();
-          this._render();
-        }
-        return;
       case "litem": return this._toggleItem(d.uid);
       case "scat": return this._setFoodCategory(Number(d.i), el.value);
       case "catname": return this._renameCategory(d.cid, el);
@@ -1203,7 +1190,7 @@ class SharedDietPanel extends HTMLElement {
         const state = this._shopAll();
         this.shadowRoot.querySelector('[data-act="shopall"]')?.setAttribute("aria-checked", state);
         const btn = this.shadowRoot.querySelector('[data-act="shop"]');
-        if (btn) btn.disabled = state === "false" || !this._todo() || this._busy;
+        if (btn) btn.disabled = state === "false" || this._busy;
         return;
       }
       case "pfield": {
@@ -1489,10 +1476,8 @@ class SharedDietPanel extends HTMLElement {
 
   _vShop() {
     const ids = Object.keys(this._profiles);
-    const todo = this._todo();
     const profiles = ids.map((id) => `<label class="check"><input type="checkbox" role="switch" class="switch" data-ch="sprof" data-id="${esc(id)}"${
       this._shop.off.has(id) ? "" : " checked"}> ${esc(this._profiles[id].name)}</label>`).join("") || `<p class="muted">Nessun profilo.</p>`;
-    const todoSel = this._todoSelect();
     const rows = this._shop.preview;
     const all = this._shopAll();
     const order = this._catOrder();
@@ -1522,11 +1507,10 @@ class SharedDietPanel extends HTMLElement {
         ${id === "altro" ? "" : `<button class="icon danger" data-act="catdel" data-cid="${esc(id)}" aria-label="Elimina categoria">×</button>`}
       </div>`).join("");
     return `<div class="page-head"><h2>Lista della spesa</h2>
-        <button class="primary" data-act="shop"${todo && all !== "false" && !this._busy ? "" : " disabled"}>Aggiungi alla lista</button></div>
+        <button class="primary" data-act="shop"${all !== "false" && !this._busy ? "" : " disabled"}>Aggiungi alla lista</button></div>
       <label class="row">Cadenza <select data-ch="cadence">${CADENCES.map(([k, l]) =>
         `<option value="${k}"${k === this._shop.cadence ? " selected" : ""}>${l}</option>`).join("")}</select></label>
       <fieldset><legend>Profili</legend>${profiles}</fieldset>
-      ${todoSel}
       <fieldset><legend>Da comprare</legend>${items}</fieldset>
       <details id="cats"${open}><summary>Categorie</summary>
         <p class="muted">Ordinale come il tuo percorso nel supermercato: l'ordine vale solo per te, le categorie per tutti.</p>
@@ -1560,7 +1544,6 @@ class SharedDietPanel extends HTMLElement {
       : (groups || `<p class="muted">Tutto preso.</p>`) +
         (done.length ? `<details class="lgroup"><summary>Completati (${done.length})</summary>${done.map(check).join("")}</details>` : "");
     return `<div class="page-head"><h2>Lista</h2><div class="chips">${viewBtn("check", "Checkbox")}${viewBtn("card", "Card")}</div></div>
-      ${this._todoSelect()}
       ${body}`;
   }
 

@@ -27,7 +27,7 @@ from .store import DietStore
 _LOGGER = logging.getLogger(__name__)
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
-PLATFORMS = [Platform.SENSOR]
+PLATFORMS = [Platform.SENSOR, Platform.TODO]
 STATIC_URL = "/shared_diet_static"
 PANEL_JS = Path(__file__).parent / "frontend" / "shared-diet-panel.js"
 

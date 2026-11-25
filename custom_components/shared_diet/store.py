@@ -77,6 +77,9 @@ class DietStore:
         self._categories: list[dict] = []  # the house's shopping categories, in list order
         self._food_categories: dict[str, str] = {}  # fold_name(food) -> category id
         self._category_order: dict[str, list[str]] = {}  # HA user id -> saved order; not in the snapshot
+        # The family shopping list (todo entity): [{uid, summary, status}]. Not in the snapshot: the entity pushes it.
+        self._shopping: list[dict] = []
+        self._shopping_listeners: list[Callable[[], None]] = []
         self._listeners: list[Callable[[], None]] = []
         self._snapshot: dict | None = None
 
@@ -87,6 +90,7 @@ class DietStore:
         self._categories = data["categories"] if "categories" in data else copy.deepcopy(DEFAULT_CATEGORIES)
         self._food_categories = data.get("food_categories", {})
         self._category_order = data.get("category_order", {})
+        self._shopping = data.get("shopping", [])
         for profile in self._profiles.values():
             profile.setdefault("recipe_qty", {})
             profile.setdefault("user_id", None)
@@ -283,6 +287,54 @@ class DietStore:
         await self._async_save()  # not in the snapshot: nobody else needs a push
         return self.category_order(user_id)
 
+    # Shopping list: what the todo entity shows. Changes notify only its listeners (no snapshot push).
+
+    @property
+    def shopping(self) -> list[dict]:
+        return copy.deepcopy(self._shopping)
+
+    async def async_add_shopping(self, texts: list[str]) -> None:
+        self._shopping += [{"uid": uuid.uuid4().hex, "summary": t, "status": "needs_action"} for t in texts]
+        await self._async_shopping_changed()
+
+    async def async_update_shopping(self, uid: str, summary: str | None, status: str | None) -> None:
+        item = self._shopping_item(uid)
+        if summary is not None:
+            item["summary"] = summary
+        if status is not None:
+            item["status"] = status
+        await self._async_shopping_changed()
+
+    async def async_delete_shopping(self, uids: list[str]) -> None:
+        gone = set(uids)
+        self._shopping = [i for i in self._shopping if i["uid"] not in gone]
+        await self._async_shopping_changed()
+
+    async def async_move_shopping(self, uid: str, previous_uid: str | None) -> None:
+        """Puts the item right after previous_uid (first when None)."""
+        item = self._shopping_item(uid)
+        if previous_uid is not None:
+            self._shopping_item(previous_uid)
+        self._shopping.remove(item)
+        at = 0 if previous_uid is None else next(i for i, x in enumerate(self._shopping) if x["uid"] == previous_uid) + 1
+        self._shopping.insert(at, item)
+        await self._async_shopping_changed()
+
+    def async_add_shopping_listener(self, cb: Callable[[], None]) -> Callable[[], None]:
+        self._shopping_listeners.append(cb)
+        return lambda: self._shopping_listeners.remove(cb)
+
+    def _shopping_item(self, uid: str) -> dict:
+        item = next((i for i in self._shopping if i["uid"] == uid), None)
+        if item is None:
+            raise KeyError(uid)
+        return item
+
+    async def _async_shopping_changed(self) -> None:
+        await self._async_save()
+        for cb in list(self._shopping_listeners):
+            cb()
+
     def async_add_listener(self, cb: Callable[[], None]) -> Callable[[], None]:
         self._listeners.append(cb)
 
@@ -311,7 +363,13 @@ class DietStore:
         return {a["id"] for i in self._recipes[recipe_id]["ingredients"] for a in i["alts"]}
 
     async def _async_save(self) -> None:
-        await self._store.async_save({**self.snapshot(), "category_order": copy.deepcopy(self._category_order)})
+        await self._store.async_save(
+            {
+                **self.snapshot(),
+                "category_order": copy.deepcopy(self._category_order),
+                "shopping": copy.deepcopy(self._shopping),
+            }
+        )
 
     async def _async_commit(self) -> None:
         self._snapshot = None

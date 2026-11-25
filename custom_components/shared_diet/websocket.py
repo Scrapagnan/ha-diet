@@ -10,12 +10,14 @@ from typing import Any
 import voluptuous as vol
 
 from homeassistant.components import websocket_api
+from homeassistant.auth.permissions.const import POLICY_CONTROL
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import Unauthorized
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import config_validation as cv
 
 from .const import DOMAIN
 from .model import category_for, fold_name, food_of, shopping_items
+from .todo import UNIQUE_ID as SHOPPING_UNIQUE_ID
 from .store import (
     MAX_CATEGORIES,
     MAX_PROFILES,
@@ -323,8 +325,8 @@ async def ws_delete_recipe(hass: HomeAssistant, connection: websocket_api.Active
         vol.Required("start"): cv.date,
         vol.Required("end"): cv.date,
         vol.Required("profile_ids"): vol.Any(None, [str]),
-        # Without a todo entity nothing is added: the call only previews the items.
-        vol.Optional("todo_entity_id"): _pattern(r"todo\.[a-z0-9_]+"),
+        # True: the rows are added to the family shopping list (todo entity); otherwise only previewed.
+        vol.Optional("add", default=False): bool,
         vol.Optional("exclude", default=[]): _capped([_capped(str, MAX_ROW_LEN)], MAX_EXCLUDE),
     }
 )
@@ -351,24 +353,15 @@ async def ws_shopping(hass: HomeAssistant, connection: websocket_api.ActiveConne
     items = shopping_items(selected, start, end, data["recipes"], data["categories"], data["food_categories"])
     position = {cid: i for i, cid in enumerate(store.category_order(connection.user.id))}
     items.sort(key=lambda row: position[row["category"]])  # stable: by name within a category
-    if "todo_entity_id" not in msg:
-        connection.send_result(msg["id"], {"items": items})
-        return
-    excluded = set(msg["exclude"])
-    items = [row for row in items if row["text"] not in excluded]
-    try:
-        for text in (row["text"] for row in items):
-            # The caller's context makes HA enforce their own permission on the todo entity.
-            await hass.services.async_call(
-                "todo",
-                "add_item",
-                {"entity_id": msg["todo_entity_id"], "item": text},
-                blocking=True,
-                context=connection.context(msg),
-            )
-    except Unauthorized:
-        connection.send_error(msg["id"], "unauthorized", "Non hai i permessi su questa lista")
-        return
+    if msg["add"]:
+        # Same right HA's todo services ask for: a read-only user cannot fill the family list.
+        entity_id = er.async_get(hass).async_get_entity_id("todo", DOMAIN, SHOPPING_UNIQUE_ID)
+        if entity_id is None or not connection.user.permissions.check_entity(entity_id, POLICY_CONTROL):
+            connection.send_error(msg["id"], "unauthorized", "Non hai i permessi sulla lista della spesa")
+            return
+        excluded = set(msg["exclude"])
+        items = [row for row in items if row["text"] not in excluded]
+        await store.async_add_shopping([row["text"] for row in items])
     connection.send_result(msg["id"], {"items": items})
 
 
