@@ -81,6 +81,7 @@ details p { white-space: pre-line; margin: 6px 0; }
 .shoprow select { flex: 0 1 160px; }
 .lgroup { margin-top: 24px; padding-top: 12px; border-top: 2px solid var(--divider-color, #e0e0e0); }
 .lgroup h3 { margin: 0 0 8px; }
+.page-head .chips .chip { flex: 0 0 auto; padding: 6px 12px; }
 .lcards { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
 .lcard { min-height: 64px; text-align: left; white-space: normal; border-radius: 12px;
   background: var(--card-background-color, #fff); box-shadow: 0 1px 3px rgba(0, 0, 0, .2); }
