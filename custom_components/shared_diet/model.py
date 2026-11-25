@@ -1,7 +1,10 @@
 """Pure day/meal logic for shared_diet. No homeassistant imports."""
 
+import re
 import unicodedata
 from datetime import date, datetime, time, timedelta
+
+from .const import DEFAULT_CATEGORIES, FALLBACK_CATEGORY, FOOD_KEYWORDS, QUALIFIER_CATEGORIES
 
 
 def fold_name(s: str) -> str:
@@ -120,8 +123,49 @@ def current_and_next(
     return cur_r, nxt_r
 
 
-def shopping_items(profiles: list[dict], start: date, end: date, recipes: dict | None = None) -> list[str]:
-    """Aggregated shopping list over [start, end] (inclusive), sorted by normalized food name then unit."""
+def category_for(food: str, categories: list[dict], overrides: dict[str, str], keywords: dict[str, str] = FOOD_KEYWORDS) -> str:
+    """Category id of a food: its override, else the keyword found (as whole words in the folded name) that comes first in
+    the name, longest on a tie ("Yogurt alla fragola" -> yogurt, "Latte di soia" -> latte di soia), else "altro".
+    A qualifier keyword ("surgelati") wins wherever it is. A category that no longer exists counts as no match."""
+    ids = {c["id"] for c in categories}
+    key = fold_name(food)
+    if overrides.get(key) in ids:
+        return overrides[key]
+    words = " " + " ".join(re.findall(r"\w+", key)) + " "  # punctuation-free, so "d'avena" matches "d avena"
+    hits = [kw for kw in keywords if f" {kw} " in words]
+    rank = lambda kw: (keywords[kw] in QUALIFIER_CATEGORIES, -words.index(f" {kw} "), len(kw))  # noqa: E731
+    guess = keywords[max(hits, key=rank)] if hits else None
+    return guess if guess in ids else FALLBACK_CATEGORY
+
+
+_QTY_SUFFIX = re.compile(r" - \d[\d.e+-]*(?: .*)?$")
+_NOTE_SUFFIX = re.compile(r" \([^()]*\)$")
+
+
+def food_of(text: str) -> str:
+    """Food name of a shopping row text ("Pollo - 300 g", "Sale (q.b.)", "Pane"); other text is returned unchanged."""
+    text = " ".join(text.split())
+    return _NOTE_SUFFIX.sub("", _QTY_SUFFIX.sub("", text)) or text
+
+
+def effective_order(saved: list[str], categories: list[dict]) -> list[str]:
+    """A user's category order: their saved order on existing categories, then the others in list order."""
+    ids = [c["id"] for c in categories]
+    known = set(ids)
+    order = [cid for cid in dict.fromkeys(saved) if cid in known]
+    return order + [cid for cid in ids if cid not in order]
+
+
+def shopping_items(
+    profiles: list[dict],
+    start: date,
+    end: date,
+    recipes: dict | None = None,
+    categories: list[dict] | None = None,
+    overrides: dict[str, str] | None = None,
+) -> list[dict]:
+    """Aggregated shopping rows {text, food, category, manual} over [start, end] (inclusive), sorted by normalized food
+    name then unit. `manual`: the category is the food's override, not a guess from its name."""
     totals: dict[tuple[str, str], tuple[str, float]] = {}  # (food, unit) -> (first spelling, sum)
     untimed: dict[str, tuple[str, str]] = {}  # food -> (first spelling, note)
     day = start
@@ -140,13 +184,24 @@ def shopping_items(profiles: list[dict], start: date, end: date, recipes: dict |
                             totals[key] = (name, qty + item["qty"])
         day += timedelta(days=1)
     numeric_foods = {norm for norm, _ in totals}
-    rows = [(norm, unit, f"{name} - {qty:g} {unit}") for (norm, unit), (name, qty) in totals.items()]
+    rows = [(norm, unit, name, f"{name} - {qty:g} {unit}") for (norm, unit), (name, qty) in totals.items()]
     rows += [
-        (norm, "", f"{name} ({note})" if note else name)
+        (norm, "", name, f"{name} ({note})" if note else name)
         for norm, (name, note) in untimed.items()
         if norm not in numeric_foods
     ]
-    return [text for _, _, text in sorted(rows)]
+    categories = DEFAULT_CATEGORIES if categories is None else categories
+    overrides = overrides or {}
+    ids = {c["id"] for c in categories}
+    return [
+        {
+            "text": text,
+            "food": name,
+            "category": category_for(name, categories, overrides),
+            "manual": overrides.get(fold_name(name)) in ids,
+        }
+        for _, _, name, text in sorted(rows)
+    ]
 
 
 def format_item(item: dict) -> str:

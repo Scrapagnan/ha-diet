@@ -3,15 +3,6 @@
 import copy
 
 import pytest
-from homeassistant.components.todo import (
-    DATA_COMPONENT,
-    DOMAIN as TODO_DOMAIN,
-    TodoItem,
-    TodoItemStatus,
-    TodoListEntity,
-    TodoListEntityFeature,
-)
-from homeassistant.setup import async_setup_component
 
 from custom_components.shared_diet import websocket as ws
 from custom_components.shared_diet.const import DOMAIN
@@ -61,37 +52,20 @@ async def test_profile_cardinality_is_capped(client, week_meals, label):
     assert resp["error"]["code"] == "invalid_format", label
 
 
-# --- finding 2: shopping must not act as a deputy for users without todo permission -----------------
-
-
-class _List(TodoListEntity):
-    _attr_supported_features = TodoListEntityFeature.CREATE_TODO_ITEM
-
-    def __init__(self) -> None:
-        self.entity_id = "todo.privata"
-        self._attr_name = "Privata"
-        self._attr_unique_id = "privata"
-        self._attr_todo_items = []
-
-    async def async_create_todo_item(self, item: TodoItem) -> None:
-        self._attr_todo_items.append(TodoItem(summary=item.summary, uid=str(len(self._attr_todo_items)), status=TodoItemStatus.NEEDS_ACTION))
-        self.async_write_ha_state()
+# --- finding 2: a read-only user must not fill the family shopping list -----------------------------
 
 
 async def test_shopping_respects_todo_permissions(hass, hass_ws_client, setup_entry):
-    assert await async_setup_component(hass, TODO_DOMAIN, {})
-    todo = _List()
-    await hass.data[DATA_COMPONENT].async_add_entities([todo])
     reader = await _user_client(hass, hass_ws_client, "Ospite", "system-read-only")
 
     profile = own_profile(reader)
     profile["week"]["0"] = [meal("pasta", "12:00", [[{"alts": [item("Pasta", 80.0)]}]])]
     assert (await call(reader, "save_profile", profile=profile))["success"]
     resp = await call(
-        reader, "shopping", start=MONDAY.isoformat(), end=MONDAY.isoformat(), profile_ids=None, todo_entity_id="todo.privata"
+        reader, "shopping", start=MONDAY.isoformat(), end=MONDAY.isoformat(), profile_ids=None, add=True
     )
     assert resp["error"]["code"] == "unauthorized"
-    assert todo.todo_items == []
+    assert reader.store.shopping == []
 
 
 # --- finding 3: the API must stop when the config entry is unloaded --------------------------------

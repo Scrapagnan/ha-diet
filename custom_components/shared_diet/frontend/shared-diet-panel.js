@@ -1,10 +1,15 @@
 /* Dieta: pannello laterale di Shared Diet. Web component vanilla, nessuna dipendenza. */
 
 const TABS = [
-  ["today", "Oggi"], ["week", "Settimana"], ["choices", "Scelte"], ["recipes", "Ricette"], ["shop", "Spesa"], ["profiles", "Profili"],
+  ["today", "Oggi"], ["week", "Settimana"], ["choices", "Scelte"], ["recipes", "Ricette"], ["shop", "Spesa"], ["list", "Lista"], ["cats", "Categorie"], ["profiles", "Profili"],
 ];
 const DAYS = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato", "Domenica"];
 const DAYS_SHORT = ["Lun", "Mar", "Mer", "Gio", "Ven", "Sab", "Dom"];
+// Material Design "delete" icon (same as HA's mdi:delete), drawn in the text color.
+const TRASH = `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor"
+  d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z"/></svg>`;
+// Per-user panel preferences, kept by HA's frontend user data (server side, follows the user on every device).
+const PREFS_KEY = "shared_diet";
 const CADENCES = [["1w", "Settimanale"], ["2w", "Ogni 2 settimane"], ["1m", "Mensile"]];
 
 const CSS = `
@@ -74,6 +79,25 @@ input, select { padding: 6px 8px; min-width: 0; max-width: 100%; border: 1px sol
 textarea { font: inherit; font-size: 16px; color: inherit; width: 100%; padding: 6px 8px; border: 1px solid var(--divider-color, #e0e0e0);
   border-radius: 6px; background: var(--card-background-color, #fff); }
 details p { white-space: pre-line; margin: 6px 0; }
+.catlist { margin: 8px 0; }
+/* Fixed columns: grip, name, delete. "altro" has an empty last cell, so every name field is equally wide. */
+.catrow { display: grid; grid-template-columns: 40px 1fr 40px; align-items: center; gap: 8px; margin: 6px 0;
+  border-radius: 8px; background: var(--card-background-color, #fff); }
+.catrow input { width: 100%; }
+.catrow.dragging { opacity: 0.6; box-shadow: 0 3px 10px rgba(0, 0, 0, .35); }
+.grip { cursor: grab; touch-action: none; user-select: none; font-size: 20px; }
+.grip:active { cursor: grabbing; }
+.shoprow { justify-content: space-between; flex-wrap: nowrap; }
+.shoprow label { margin: 0; min-width: 0; }
+.shoprow select { flex: 0 1 160px; }
+.lgroup { margin-top: 24px; padding-top: 12px; border-top: 2px solid var(--divider-color, #e0e0e0); }
+.lgroup h3 { margin: 0 0 8px; }
+.page-head .chips .chip { flex: 0 0 auto; padding: 6px 12px; }
+.lcards { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+.lcard { min-height: 64px; text-align: left; white-space: normal; border-radius: 12px;
+  background: var(--card-background-color, #fff); box-shadow: 0 1px 3px rgba(0, 0, 0, .2); }
+.lcard.done { opacity: 0.55; text-decoration: line-through; box-shadow: none; }
+details.lgroup .lcards { margin-top: 8px; }
 .or { font-size: 12px; font-weight: 600; text-align: center; color: var(--secondary-text-color, #727272); }
 .chips { display: flex; gap: 4px; }
 .remind button.chip { flex: 0 0 auto; padding: 6px 10px; }
@@ -341,6 +365,7 @@ class SharedDietPanel extends HTMLElement {
     this._view = "today";
     this._profiles = null; // last subscribe payload
     this._recipes = {}; // recipe book from the same payload, by id
+    this._categories = []; // the house's shopping categories [{id, name}], same payload
     this._loadError = "";
     this._profileId = null;
     this._draft = null; // editable copy of the selected profile
@@ -356,7 +381,9 @@ class SharedDietPanel extends HTMLElement {
     this._wday = weekday(today); // Settimana and Scelte views
     let cadence = "1w";
     try { cadence = localStorage.getItem("shared_diet.cadence") ?? "1w"; } catch { /* storage blocked */ }
-    this._shop = { cadence: CADENCES.some(([k]) => k === cadence) ? cadence : "1w", off: new Set(), todo: "", preview: null, skip: new Set(), seq: 0 };
+    this._shop = { cadence: CADENCES.some(([k]) => k === cadence) ? cadence : "1w", off: new Set(), preview: null, skip: new Set(), seq: 0, order: [] };
+    // Lista tab: live items of the family todo entity, each with its category (by item text).
+    this._todoList = { view: "check", entity: "", items: null, cats: new Map(), unsub: null };
     this.shadowRoot.addEventListener("click", (e) => this._onClick(e));
     this.shadowRoot.addEventListener("change", (e) => this._onChange(e));
     this.shadowRoot.addEventListener("input", (e) => this._onInput(e));
@@ -364,7 +391,17 @@ class SharedDietPanel extends HTMLElement {
     for (const ev of ["pointerdown", "mousedown"])
       this.shadowRoot.addEventListener(ev, (e) => { if (e.target.closest(".sugg")) e.preventDefault(); });
     this.shadowRoot.addEventListener("keydown", (e) => this._suggKey(e));
-    this.shadowRoot.addEventListener("focusout", (e) => { if (e.target.classList?.contains("food")) this._hideSugg(); });
+    this.shadowRoot.addEventListener("pointerdown", (e) => this._dragStart(e));
+    this.shadowRoot.addEventListener("keydown", (e) => this._gripKey(e));
+    this.shadowRoot.addEventListener("focusout", (e) => {
+      if (e.target.classList?.contains("food")) this._hideSugg();
+      // Left a category field for nothing clickable in the panel: catch up on the pushes skipped while typing.
+      // Towards a button, the action it runs renders instead (a render now would swallow the click).
+      if (this._shop.stale && !e.relatedTarget && e.target.matches?.('[data-ch="catname"], #newcat')) {
+        this._shop.stale = false;
+        this._render();
+      }
+    });
   }
 
   // Food names already used anywhere (all profiles, saved or still being edited), one per spelling-insensitive name.
@@ -449,7 +486,10 @@ class SharedDietPanel extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
-    if (!this._unsub) this._subscribe();
+    if (!this._unsub) {
+      this._subscribe();
+      this._loadPrefs();
+    }
     // Not re-rendered on every hass update: that would wipe inputs the user is typing into.
     if (!this._rendered) this._render();
   }
@@ -461,12 +501,14 @@ class SharedDietPanel extends HTMLElement {
 
   connectedCallback() {
     if (this._hass && !this._unsub) this._subscribe();
+    if (this._hass) this._listWatch();
     // Oggi has no inputs: re-render each minute so the next-meal highlight follows the clock.
     this._tick = setInterval(() => { if (this._view === "today" && !this._busy) this._render(); }, 60000);
   }
 
   disconnectedCallback() {
     clearInterval(this._tick);
+    this._listWatch(true);
     this._unsub?.then((unsub) => unsub?.(), () => {});
     this._unsub = null;
     document.getElementById("shared-diet-error")?.remove(); // don't leave it over other HA pages
@@ -474,7 +516,7 @@ class SharedDietPanel extends HTMLElement {
 
   _subscribe() {
     this._unsub = this._hass.connection
-      .subscribeMessage((msg) => this._onData(msg.profiles, msg.recipes), { type: "shared_diet/subscribe" })
+      .subscribeMessage((msg) => this._onData(msg.profiles, msg.recipes, msg.categories), { type: "shared_diet/subscribe" })
       .catch((err) => {
         this._loadError = err?.message || "Impossibile caricare i dati";
         this._render();
@@ -483,9 +525,10 @@ class SharedDietPanel extends HTMLElement {
   }
 
   // Latest server data. Unsaved edits to the selected profile survive; a deleted profile resets the selection.
-  _onData(profiles, recipes) {
+  _onData(profiles, recipes, categories) {
     this._profiles = profiles;
     this._recipes = recipes ?? {};
+    this._categories = categories ?? [];
     if (!profiles[this._profileId]) {
       this._profileId = this._ownId() ?? Object.keys(profiles)[0] ?? null;
       this._draft = null;
@@ -505,7 +548,12 @@ class SharedDietPanel extends HTMLElement {
         return;
       }
     }
+    if (this._view === "cats" && this.shadowRoot.activeElement?.matches?.('[data-ch="catname"], #newcat')) {
+      this._shop.stale = true; // rendered when the field is left (focusout) or by the next action (_run)
+      return;
+    }
     if (this._view === "shop") this._loadShop();
+    if (this._view === "list") this._listCats(true); // categories or overrides may have changed
     this._render();
   }
 
@@ -638,7 +686,9 @@ class SharedDietPanel extends HTMLElement {
     this._busy = true;
     this._render();
     try {
-      const done = (await fn()) || okText;
+      // Only a string is a message: a websocket reply ({}) passed through by `() => callWS(...)` is not.
+      const res = await fn();
+      const done = (typeof res === "string" && res) || okText;
       // Success goes to HA's own toast (auto-closing).
       if (done) this.dispatchEvent(new CustomEvent("hass-notification", {
         detail: { message: done, duration: done === okText ? 3000 : 6000 }, bubbles: true, composed: true }));
@@ -646,6 +696,7 @@ class SharedDietPanel extends HTMLElement {
       this._flash(err?.message || "Operazione non riuscita");
     } finally {
       this._busy = false;
+      this._shop.stale = false;
       this._render();
     }
   }
@@ -747,9 +798,93 @@ class SharedDietPanel extends HTMLElement {
     }, "Ricetta eliminata");
   }
 
+  // The family shopping list: the integration's own todo entity (found by platform, in case it was renamed).
   _todo() {
-    const todos = Object.keys(this._hass.states).filter((e) => e.startsWith("todo."));
-    return todos.includes(this._shop.todo) ? this._shop.todo : todos[0] ?? "";
+    const own = Object.values(this._hass.entities ?? {}).find((e) => e.platform === "shared_diet" && e.entity_id.startsWith("todo."));
+    return own?.entity_id ?? "todo.lista_della_spesa";
+  }
+
+  // Follows the family todo entity while the Lista tab is shown; `stop` ends it (panel removed).
+  _listWatch(stop = false) {
+    const entity = !stop && this._view === "list" ? this._todo() : "";
+    if (entity === this._todoList.entity) return;
+    this._todoList.unsub?.then((unsub) => unsub?.(), () => {});
+    Object.assign(this._todoList, { entity, items: null, cats: new Map(), unsub: null });
+    if (!entity) return;
+    this._loadOrder();
+    this._todoList.unsub = this._hass.connection
+      .subscribeMessage((ev) => this._onListItems(entity, ev.items), { type: "todo/item/subscribe", entity_id: entity })
+      .catch((err) => {
+        if (this._todoList.entity === entity) {
+          this._todoList.items = [];
+          this._flash(err?.message || "Impossibile leggere la lista");
+          this._render();
+        }
+        return () => {};
+      });
+  }
+
+  async _loadPrefs() {
+    try {
+      const { value } = await this._hass.callWS({ type: "frontend/get_user_data", key: PREFS_KEY });
+      if (value?.listView === "card" || value?.listView === "check") this._todoList.view = value.listView;
+    } catch { /* defaults */ }
+    if (this._view === "list" && !this._busy) this._render();
+  }
+
+  _savePrefs() {
+    this._hass.callWS({ type: "frontend/set_user_data", key: PREFS_KEY, value: { listView: this._todoList.view } })
+      .catch((err) => this._flash(err?.message || "Preferenza non salvata"));
+  }
+
+  // This user's saved category order, for the tabs that need it without a shopping preview.
+  _loadOrder() {
+    const view = this._view;
+    this._hass.callWS({ type: "shared_diet/get_category_order" }).then((r) => {
+      this._shop.order = r.order;
+      const typing = this.shadowRoot.activeElement?.matches?.('[data-ch="catname"], #newcat');
+      if (this._view === view && !this._busy && !typing) this._render();
+    }, () => {});
+  }
+
+  _onListItems(entity, items) {
+    if (entity !== this._todoList.entity) return;
+    this._todoList.items = items ?? [];
+    return this._listCats();
+  }
+
+  // Asks the server the category of item texts not seen yet (items typed by hand included); `all` asks again for every
+  // text, keeping the current groups on screen until the answer replaces them.
+  async _listCats(all = false) {
+    const { entity, cats } = this._todoList;
+    const texts = [...new Set((this._todoList.items ?? []).map((i) => i.summary))].filter((t) => all || !cats.has(t)).slice(0, 1000);
+    if (texts.length) {
+      try {
+        const res = await this._hass.callWS({ type: "shared_diet/categorize", texts });
+        if (entity !== this._todoList.entity) return; // another list since
+        const into = all ? (this._todoList.cats = new Map()) : cats;
+        texts.forEach((t, i) => into.set(t, res.categories[i]));
+      } catch (err) {
+        this._flash(err?.message || "Impossibile classificare la lista");
+      }
+    }
+    if (entity === this._todoList.entity && this._view === "list" && !this._busy) this._render();
+  }
+
+  // Ticks or unticks a todo item; shown at once, confirmed by the subscription.
+  async _toggleItem(uid) {
+    const item = this._todoList.items?.find((i) => i.uid === uid);
+    if (!item) return;
+    const before = item.status;
+    item.status = before === "completed" ? "needs_action" : "completed";
+    this._render();
+    try {
+      await this._hass.callService("todo", "update_item", { item: uid, status: item.status }, { entity_id: this._todoList.entity });
+    } catch (err) {
+      item.status = before;
+      this._flash(err?.message || "Operazione non riuscita");
+      this._render();
+    }
   }
 
   _shopMsg() {
@@ -768,17 +903,21 @@ class SharedDietPanel extends HTMLElement {
     this._shop.preview = null;
     this._shop.failed = false;
     if (this._view === "shop") this._render();
-    let items = [], failed = null;
-    if (msg.profile_ids?.length !== 0 && Object.keys(this._profiles).length) {
-      try {
-        items = (await this._hass.callWS(msg)).items;
-      } catch (err) {
-        failed = err;
-      }
+    const wanted = msg.profile_ids?.length !== 0 && Object.keys(this._profiles).length;
+    let items = [], order = null, failed = null;
+    try {
+      // The user's category order comes along: it groups the preview and lists the categories.
+      [items, order] = await Promise.all([
+        wanted ? this._hass.callWS(msg).then((r) => r.items) : [],
+        this._hass.callWS({ type: "shared_diet/get_category_order" }).then((r) => r.order),
+      ]);
+    } catch (err) {
+      failed = err;
     }
     if (seq !== this._shop.seq) return;
     if (failed) this._flash(failed?.message || "Impossibile calcolare la spesa");
-    this._shop.preview = items;
+    if (order) this._shop.order = order;
+    this._shop.preview = failed ? [] : items;
     this._shop.failed = !!failed;
     if (this._view === "shop") this._render();
   }
@@ -786,19 +925,130 @@ class SharedDietPanel extends HTMLElement {
   // Master switch: true/false/mixed over the previewed rows.
   _shopAll() {
     const rows = this._shop.preview ?? [];
-    const off = rows.filter((t) => this._shop.skip.has(t)).length;
+    const off = rows.filter((r) => this._shop.skip.has(r.text)).length;
     return !rows.length || off === rows.length ? "false" : off ? "mixed" : "true";
   }
 
+  // Adds the selected rows to the family list, then shows it (Lista tab).
   _runShop() {
-    const todo = this._todo();
-    if (!todo) return this._flash("Nessuna lista To-do disponibile");
     if (!this._shop.preview || this._shop.failed) return;
-    const exclude = (this._shop.preview ?? []).filter((t) => this._shop.skip.has(t));
+    const exclude = (this._shop.preview ?? []).map((r) => r.text).filter((t) => this._shop.skip.has(t));
     if (this._shopAll() === "false") return this._flash("Nessun alimento selezionato");
     return this._run(async () => {
-      await this._hass.callWS({ ...this._shopMsg(), todo_entity_id: todo, exclude });
-    }, "Lista della spesa aggiornata");
+      await this._hass.callWS({ ...this._shopMsg(), add: true, exclude });
+      this._view = "list";
+      this._listWatch();
+    }, "Aggiunti alla lista della spesa");
+  }
+
+  // This user's category order: the saved one on existing categories, then the rest in list order (as the server does).
+  _catOrder() {
+    const ids = this._categories.map((c) => c.id);
+    const order = [...new Set(this._shop.order)].filter((id) => ids.includes(id));
+    return [...order, ...ids.filter((id) => !order.includes(id))];
+  }
+
+  // Keyboard alternative to dragging: arrows on a focused grip.
+  _moveCategory(id, step) {
+    const order = this._catOrder();
+    const i = order.indexOf(id), j = i + step;
+    if (i < 0 || j < 0 || j >= order.length) return;
+    [order[i], order[j]] = [order[j], order[i]];
+    return this._saveOrder(order, `.grip[data-cid="${id}"]`);
+  }
+
+  // `focus`: the element to focus once saved (the panel is inert, so unfocusable, while saving).
+  _saveOrder(order, focus = null) {
+    const before = this._shop.order;
+    this._shop.order = order; // shown at once; the preview regroups by it on render
+    return this._run(async () => {
+      try {
+        this._shop.order = (await this._hass.callWS({ type: "shared_diet/set_category_order", order })).order;
+      } catch (err) {
+        this._shop.order = before; // not saved: show the order the todo list will follow
+        throw err;
+      } finally {
+        this._focus = focus;
+      }
+    });
+  }
+
+  // Drag & drop with pointer events (HTML5 drag does not work on touch screens): the row follows the pointer among its
+  // siblings, and the order is saved on release.
+  _dragStart(e) {
+    const grip = e.target.closest?.(".grip");
+    if (!grip || this._busy || e.button > 0) return;
+    e.preventDefault();
+    const row = grip.closest(".catrow"), list = row.parentElement;
+    row.classList.add("dragging");
+    // Listened on window, not captured on the grip: moving the row in the DOM drops pointer capture.
+    const move = (ev) => {
+      for (const other of list.children) {
+        if (other === row) continue;
+        const b = other.getBoundingClientRect();
+        if (ev.clientY < b.top || ev.clientY > b.bottom) continue;
+        list.insertBefore(row, ev.clientY < b.top + b.height / 2 ? other : other.nextSibling);
+        return;
+      }
+    };
+    const end = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+      row.classList.remove("dragging");
+      const order = [...list.children].map((r) => r.dataset.cid);
+      if (order.join() !== this._catOrder().join()) this._saveOrder(order);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+  }
+
+  _gripKey(e) {
+    const grip = e.target.closest?.(".grip");
+    if (!grip || !["ArrowUp", "ArrowDown"].includes(e.key)) return;
+    e.preventDefault();
+    if (!this._busy) this._moveCategory(grip.dataset.cid, e.key === "ArrowUp" ? -1 : 1);
+  }
+
+  _addCategory() {
+    const name = this.shadowRoot.getElementById("newcat")?.value.trim();
+    if (!name) return this._flash("Scrivi il nome della categoria");
+    this._shop.newCat = name; // survives the re-renders; cleared only once created
+    return this._run(async () => {
+      await this._hass.callWS({ type: "shared_diet/create_category", name });
+      this._shop.newCat = "";
+    }, "Categoria aggiunta");
+  }
+
+  _renameCategory(id, input) {
+    const name = input.value.trim();
+    const cur = this._categories.find((c) => c.id === id);
+    if (!cur || name === cur.name) return;
+    if (!name) {
+      input.value = cur.name;
+      return this._flash("Il nome della categoria è obbligatorio");
+    }
+    return this._run(() => this._hass.callWS({ type: "shared_diet/rename_category", category_id: id, name }), "Categoria rinominata");
+  }
+
+  _deleteCategory(id) {
+    const cur = this._categories.find((c) => c.id === id);
+    if (!cur || !confirm(`Eliminare la categoria «${cur.name}»? Gli alimenti assegnati a mano tornano alla categoria automatica.`)) return;
+    return this._run(() => this._hass.callWS({ type: "shared_diet/delete_category", category_id: id }), "Categoria eliminata");
+  }
+
+  // Valid for every profile and every user: the push that follows reloads the preview.
+  // "" = automatic: the override goes and the food follows its name again.
+  _setFoodCategory(i, id) {
+    const row = this._shop.preview?.[i];
+    if (!row || id === this._manualCat(row)) return;
+    return this._run(() => this._hass.callWS({ type: "shared_diet/set_food_category", food: row.food, category_id: id || null }));
+  }
+
+  // The row's hand-picked category, "" when it is automatic (the server folds names, so it tells).
+  _manualCat(row) {
+    return row.manual ? row.category : "";
   }
 
   // Meal list addressed by ctx: "w<weekday>" (weekly schema).
@@ -823,6 +1073,8 @@ class SharedDietPanel extends HTMLElement {
     if (d.tab) {
       this._view = d.tab;
       if (d.tab === "shop") this._loadShop();
+      if (d.tab === "cats") this._loadOrder();
+      this._listWatch();
       return this._render();
     }
     if (d.act === "fold") {
@@ -889,10 +1141,17 @@ class SharedDietPanel extends HTMLElement {
       case "shop": return this._runShop();
       case "shopall": {
         const on = this._shopAll() !== "true";
-        this._shop.skip = on ? new Set() : new Set(this._shop.preview);
+        this._shop.skip = on ? new Set() : new Set(this._shop.preview.map((r) => r.text));
         return this._render();
       }
       case "alts": this._showAlts = !this._showAlts; return this._render();
+      case "catdel": return this._deleteCategory(d.cid);
+      case "catadd": return this._addCategory();
+      case "litem": return this._toggleItem(d.uid);
+      case "lview":
+        this._todoList.view = d.v;
+        this._savePrefs();
+        return this._render();
       case "wday": this._wday = Number(d.d); return this._render();
     }
     if (!d.ctx) return;
@@ -973,6 +1232,7 @@ class SharedDietPanel extends HTMLElement {
     if (this._busy || !["INPUT", "TEXTAREA"].includes(el.tagName)) return;
     if (["pfield", "meal", "item", "rfield", "ring", "rqty"].includes(el.dataset.ch) && el.type !== "checkbox") this._onChange(e);
     if (el.classList.contains("food")) this._suggest(el);
+    if (el.id === "newcat") this._shop.newCat = el.value;
   }
 
   _onChange(e) {
@@ -997,21 +1257,23 @@ class SharedDietPanel extends HTMLElement {
         alt[d.f] = d.f === "qty" ? (el.value === "" ? null : Number(el.value)) : el.value;
         return this._markRecipeDirty();
       }
-      case "stodo": this._shop.todo = el.value; return;
+      case "litem": return this._toggleItem(d.uid);
+      case "scat": return this._setFoodCategory(Number(d.i), el.value);
+      case "catname": return this._renameCategory(d.cid, el);
       case "sprof":
         if (el.checked) this._shop.off.delete(d.id);
         else this._shop.off.add(d.id);
         return this._loadShop();
       case "sitem": {
         // Updated in place: a full render would move focus away from the switch.
-        const t = this._shop.preview?.[Number(d.i)];
+        const t = this._shop.preview?.[Number(d.i)]?.text;
         if (t === undefined) return;
         if (el.checked) this._shop.skip.delete(t);
         else this._shop.skip.add(t);
         const state = this._shopAll();
         this.shadowRoot.querySelector('[data-act="shopall"]')?.setAttribute("aria-checked", state);
         const btn = this.shadowRoot.querySelector('[data-act="shop"]');
-        if (btn) btn.disabled = state === "false" || !this._todo() || this._busy;
+        if (btn) btn.disabled = state === "false" || this._busy;
         return;
       }
       case "pfield": {
@@ -1103,7 +1365,7 @@ class SharedDietPanel extends HTMLElement {
     if (!this._profiles) return `<p class="muted">Caricamento…</p>`;
     const views = {
       today: () => this._vToday(), week: () => this._vWeek(),
-      choices: () => this._vChoices(), recipes: () => this._vRecipes(), shop: () => this._vShop(), profiles: () => this._vProfiles(),
+      choices: () => this._vChoices(), recipes: () => this._vRecipes(), shop: () => this._vShop(), list: () => this._vList(), cats: () => this._vCats(), profiles: () => this._vProfiles(),
     };
     return `<div id="notice">${this._noticeHtml()}</div>` + views[this._view]() + this._datalists();
   }
@@ -1297,29 +1559,81 @@ class SharedDietPanel extends HTMLElement {
 
   _vShop() {
     const ids = Object.keys(this._profiles);
-    const todos = Object.keys(this._hass.states).filter((e) => e.startsWith("todo."));
-    const todo = this._todo();
     const profiles = ids.map((id) => `<label class="check"><input type="checkbox" role="switch" class="switch" data-ch="sprof" data-id="${esc(id)}"${
       this._shop.off.has(id) ? "" : " checked"}> ${esc(this._profiles[id].name)}</label>`).join("") || `<p class="muted">Nessun profilo.</p>`;
-    const todoSel = todos.length
-      ? `<label class="row">Lista To-do <select data-ch="stodo">${todos.map((e) => `<option value="${esc(e)}"${e === todo ? " selected" : ""}>${esc(this._hass.states[e].attributes.friendly_name ?? e)}</option>`).join("")}</select></label>`
-      : `<p class="msg err">Nessuna lista To-do: creane una in Home Assistant.</p>`;
     const rows = this._shop.preview;
     const all = this._shopAll();
+    const order = this._catOrder();
+    const names = Object.fromEntries(this._categories.map((c) => [c.id, c.name]));
+    const catOpts = (sel) => `<option value="">Automatica</option>` +
+      order.map((id) => `<option value="${esc(id)}"${id === sel ? " selected" : ""}>${esc(names[id])}</option>`).join("");
+    // One group per category in this user's order; empty categories are left out.
+    const groups = order.map((cid) => {
+      // A row from a stale preview may name a category deleted since: it shows under "altro" rather than vanish.
+      const group = (rows ?? []).map((r, i) => [r, i]).filter(([r]) => (order.includes(r.category) ? r.category : "altro") === cid);
+      return group.length ? `<h3>${esc(names[cid])}</h3>${group.map(([r, i]) =>
+        `<div class="check shoprow"><label class="check"><input type="checkbox" role="switch" class="switch" data-ch="sitem" data-i="${i}"${
+          this._shop.skip.has(r.text) ? "" : " checked"}> ${esc(r.text)}</label>
+          <select data-ch="scat" data-i="${i}" aria-label="Categoria di ${esc(r.food)}">${catOpts(this._manualCat(r))}</select></div>`).join("")}` : "";
+    }).join("");
     const items = rows === null ? `<p class="muted">Caricamento…</p>`
       : this._shop.failed ? `<p class="msg err">Impossibile calcolare la spesa.</p>`
       : rows.length ? `<div class="check"><button class="switch" role="checkbox" aria-checked="${all}" data-act="shopall"
-          aria-label="Tutti gli alimenti"></button> Tutti gli alimenti</div>${rows.map((t, i) =>
-          `<label class="check"><input type="checkbox" role="switch" class="switch" data-ch="sitem" data-i="${i}"${
-            this._shop.skip.has(t) ? "" : " checked"}> ${esc(t)}</label>`).join("")}`
+          aria-label="Tutti gli alimenti"></button> Tutti gli alimenti</div>${groups}`
       : `<p class="muted">Nessun alimento nell'intervallo.</p>`;
     return `<div class="page-head"><h2>Lista della spesa</h2>
-        <button class="primary" data-act="shop"${todo && all !== "false" && !this._busy ? "" : " disabled"}>Aggiungi alla lista</button></div>
+        <button class="primary" data-act="shop"${all !== "false" && !this._busy ? "" : " disabled"}>Aggiungi alla lista</button></div>
       <label class="row">Cadenza <select data-ch="cadence">${CADENCES.map(([k, l]) =>
         `<option value="${k}"${k === this._shop.cadence ? " selected" : ""}>${l}</option>`).join("")}</select></label>
       <fieldset><legend>Profili</legend>${profiles}</fieldset>
-      ${todoSel}
       <fieldset><legend>Da comprare</legend>${items}</fieldset>`;
+  }
+
+  // House categories in this user's order: drag the grip (or arrows on it) to reorder, rename in place, delete.
+  _vCats() {
+    const names = Object.fromEntries(this._categories.map((c) => [c.id, c.name]));
+    const rows = this._catOrder().map((id) => `<div class="catrow" data-cid="${esc(id)}">
+        <button class="icon grip" data-cid="${esc(id)}" aria-label="Trascina per spostare ${esc(names[id])} (o frecce su/giù)">≡</button>
+        <input data-ch="catname" data-cid="${esc(id)}" value="${esc(names[id])}" maxlength="40" aria-label="Nome categoria">
+        ${id === "altro" ? "<span></span>" : `<button class="icon danger" data-act="catdel" data-cid="${esc(id)}" aria-label="Elimina ${esc(names[id])}" title="Elimina">${TRASH}</button>`}
+      </div>`).join("");
+    return `<h2>Categorie</h2>
+      <p class="muted">Trascinale nell'ordine del tuo percorso nel supermercato: l'ordine vale solo per te, le categorie per tutti.</p>
+      <div class="catlist">${rows}</div>
+      <div class="row"><input class="grow" id="newcat" maxlength="40" placeholder="Nuova categoria" value="${esc(this._shop.newCat ?? "")}">
+        <button data-act="catadd">Aggiungi categoria</button></div>`;
+  }
+
+  // The todo list grouped by category in this user's order, a clear gap between groups; ticked items go to the bottom.
+  _vList() {
+    const { items, view } = this._todoList;
+    const order = this._catOrder();
+    const names = Object.fromEntries(this._categories.map((c) => [c.id, c.name]));
+    const catOf = (i) => { const c = this._todoList.cats.get(i.summary); return order.includes(c) ? c : "altro"; };
+    const open = (items ?? []).filter((i) => i.status !== "completed");
+    const done = (items ?? []).filter((i) => i.status === "completed");
+    const check = (i) => `<label class="check"><input type="checkbox" data-ch="litem" data-uid="${esc(i.uid)}"${
+      i.status === "completed" ? " checked" : ""}> ${esc(i.summary)}</label>`;
+    const card = (i) => i.status === "completed"
+      ? `<button class="lcard done" data-act="litem" data-uid="${esc(i.uid)}" aria-label="Riapri ${esc(i.summary)}">${esc(i.summary)}</button>`
+      : `<button class="lcard" data-act="litem" data-uid="${esc(i.uid)}" aria-label="Completa ${esc(i.summary)}">${esc(i.summary)}</button>`;
+    // Kept open across re-renders (a tick inside it re-renders the tab) once the user opened it.
+    const doneOpen = this.shadowRoot.getElementById("done")?.open;
+    const listHtml = (list) => (view === "card" ? `<div class="lcards">${list.map(card).join("")}</div>` : list.map(check).join(""));
+    const groups = order.map((cid) => {
+      const group = open.filter((i) => catOf(i) === cid);
+      if (!group.length) return "";
+      const body = listHtml(group);
+      return `<section class="lgroup"><h3>${esc(names[cid])} <span class="muted">${group.length}</span></h3>${body}</section>`;
+    }).join("");
+    const viewBtn = (v, l) => `<button class="chip${view === v ? " on" : ""}" data-act="lview" data-v="${v}" aria-pressed="${view === v}">${l}</button>`;
+    const body = !this._todoList.entity ? ""
+      : items === null ? `<p class="muted">Caricamento…</p>`
+      : !items.length ? `<p class="muted">Lista vuota.</p>`
+      : (groups || `<p class="muted">Tutto preso.</p>`) +
+        (done.length ? `<details class="lgroup" id="done"${doneOpen ? " open" : ""}><summary>Completati (${done.length})</summary>${listHtml(done)}</details>` : "");
+    return `<div class="page-head"><h2>Lista</h2><div class="chips">${viewBtn("check", "Checkbox")}${viewBtn("card", "Card")}</div></div>
+      ${body}`;
   }
 
   // One foldable card per recipe, like the Settimana meals; the name is always editable. Any number of recipes can be

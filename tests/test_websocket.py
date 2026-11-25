@@ -7,7 +7,6 @@ import voluptuous as vol
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
-    async_mock_service,
 )
 
 from custom_components.shared_diet.const import DOMAIN
@@ -208,7 +207,8 @@ async def test_subscribe_pushes_on_change(client):
     await client.send_json_auto_id({"type": "shared_diet/subscribe"})
     assert (await client.receive_json())["success"]
     event = await client.receive_json()
-    assert event["type"] == "event" and event["event"] == {"profiles": client.store.profiles, "recipes": {}}
+    assert event["type"] == "event" and event["event"] == client.store.snapshot()
+    assert set(event["event"]) == {"profiles", "recipes", "categories", "food_categories"}
 
     await client.send_json_auto_id({"type": "shared_diet/save_profile", "profile": full_profile(own_profile(client))})
     msgs = [await client.receive_json(), await client.receive_json()]
@@ -218,7 +218,6 @@ async def test_subscribe_pushes_on_change(client):
 
 
 async def test_shopping_adds_to_todo(hass, client):
-    calls = async_mock_service(hass, "todo", "add_item")
     profile = own_profile(client)
     profile["week"]["0"] = [meal("pasta", "12:00", [[{"alts": [item("Pasta", 80.0)]}]])]
     assert (await call(client, "save_profile", profile=profile))["success"]
@@ -229,34 +228,35 @@ async def test_shopping_adds_to_todo(hass, client):
         start=MONDAY.isoformat(),
         end=MONDAY.isoformat(),
         profile_ids=None,
-        todo_entity_id="todo.spesa",
+        add=True,
     )
-    assert resp["result"]["items"] == ["Pasta - 80 g"]
-    assert len(calls) == 1
-    assert calls[0].data == {"entity_id": "todo.spesa", "item": "Pasta - 80 g"}
+    assert resp["result"]["items"] == [{"text": "Pasta - 80 g", "food": "Pasta", "category": "pasta_cereali", "manual": False}]
+    await hass.async_block_till_done()
+    state = hass.states.get("todo.lista_della_spesa")
+    assert state.state == "1"  # items to buy
+    assert [i["summary"] for i in client.store.shopping] == ["Pasta - 80 g"]
 
 
 async def test_shopping_preview_and_exclude(hass, client):
-    calls = async_mock_service(hass, "todo", "add_item")
     profile = own_profile(client)
     profile["week"]["0"] = [meal("pasta", "12:00", [[{"alts": [item("Pasta", 80.0)]}, {"alts": [item("Olio", 10.0, "ml")]}]])]
     assert (await call(client, "save_profile", profile=profile))["success"]
     base = {"start": MONDAY.isoformat(), "end": MONDAY.isoformat(), "profile_ids": None}
 
-    resp = await call(client, "shopping", **base)  # no todo entity: preview only
-    assert resp["result"]["items"] == ["Olio - 10 ml", "Pasta - 80 g"]
-    assert calls == []
+    resp = await call(client, "shopping", **base)  # preview only
+    assert [r["text"] for r in resp["result"]["items"]] == ["Olio - 10 ml", "Pasta - 80 g"]  # category order: ingredienti before pasta
+    assert client.store.shopping == []
 
-    resp = await call(client, "shopping", **base, todo_entity_id="todo.spesa", exclude=["Olio - 10 ml"])
-    assert resp["result"]["items"] == ["Pasta - 80 g"]
-    assert [c.data["item"] for c in calls] == ["Pasta - 80 g"]
+    resp = await call(client, "shopping", **base, add=True, exclude=["Olio - 10 ml"])
+    assert [r["text"] for r in resp["result"]["items"]] == ["Pasta - 80 g"]
+    assert [i["summary"] for i in client.store.shopping] == ["Pasta - 80 g"]
 
     resp = await call(client, "shopping", **base, exclude=["x" * 1001])  # each excluded row is length-capped
     assert not resp["success"]
 
 
 async def test_shopping_bad_range_rejected(client):
-    base = {"profile_ids": None, "todo_entity_id": "todo.spesa", "start": MONDAY.isoformat()}
+    base = {"profile_ids": None, "add": True, "start": MONDAY.isoformat()}
 
     resp = await call(client, "shopping", **base, end=(MONDAY - timedelta(days=1)).isoformat())
     assert resp["error"]["code"] == "invalid_format"
@@ -268,18 +268,6 @@ async def test_shopping_bad_range_rejected(client):
     assert resp["success"] and resp["result"]["items"] == []
 
 
-async def test_shopping_rejects_non_todo_entity(client):
-    resp = await call(
-        client,
-        "shopping",
-        start=MONDAY.isoformat(),
-        end=MONDAY.isoformat(),
-        profile_ids=None,
-        todo_entity_id="light.spesa",
-    )
-    assert resp["error"]["code"] == "invalid_format"
-
-
 async def test_shopping_unknown_profile_not_found(client):
     resp = await call(
         client,
@@ -287,7 +275,7 @@ async def test_shopping_unknown_profile_not_found(client):
         start=MONDAY.isoformat(),
         end=MONDAY.isoformat(),
         profile_ids=["does-not-exist"],
-        todo_entity_id="todo.spesa",
+        add=True,
     )
     assert resp["error"]["code"] == "not_found"
 

@@ -577,7 +577,8 @@ const RECIPES = {
   assert.match(p._body(), /role="switch" class="switch" data-ch="sprof"/);
   assert.doesNotMatch(p._body(), /Dal .* al /);
   assert.match(p._body(), /Caricamento/);
-  p._shop.preview = ["Olio - 10 ml", "Pasta - 80 g"];
+  p._categories = [{ id: "pasta_cereali", name: "Pasta e riso" }, { id: "condimenti", name: "Condimenti" }, { id: "altro", name: "Altro" }];
+  p._shop.preview = [{ text: "Olio - 10 ml", food: "Olio", category: "condimenti" }, { text: "Pasta - 80 g", food: "Pasta", category: "pasta_cereali" }];
   let html2 = p._body();
   assert.match(html2, /class="page-head"><h2>Lista della spesa<\/h2>\s*<button class="primary" data-act="shop">/);
   assert.match(html2, /aria-checked="true" data-act="shopall"/);
@@ -591,18 +592,119 @@ const RECIPES = {
   p._onClick({ target: { closest: () => ({ dataset: { act: "shopall" } }) } }); // on -> all off
   assert.equal(p._shopAll(), "false");
   assert.match(p._body(), /data-act="shop" disabled/);
-  // The add call excludes skipped rows; no todo entity = preview only.
+  // The add call excludes skipped rows, then the Lista tab shows the family list; without `add` it is a preview.
+  assert.doesNotMatch(p._body(), /data-ch="stodo"/); // no todo entity to pick
   const sent = [];
-  p._hass.callWS = async (m) => { sent.push(m); return { items: ["Olio - 10 ml"] }; };
+  const OLIO = { text: "Olio - 10 ml", food: "Olio", category: "condimenti" };
+  p._hass.callWS = async (m) => { sent.push(m); return { items: [OLIO] }; };
+  p._hass.connection = { subscribeMessage: async () => () => {} };
   p._shop.skip = new Set(["Pasta - 80 g"]);
   p.dispatchEvent = () => {};
   p._flash = (m) => { throw new Error(m); };
   await p._runShop();
   assert.deepEqual(plain(sent[0]).exclude, ["Pasta - 80 g"]);
-  assert.equal(sent[0].todo_entity_id, "todo.spesa");
+  assert.equal(sent[0].add, true);
+  assert.equal(p._view, "list");
+  assert.equal(p._todoList.entity, "todo.lista_della_spesa"); // the integration's own list
+  p._view = "shop";
+  p._listWatch();
+  sent.length = 0;
   await p._loadShop();
-  assert.equal("todo_entity_id" in sent[1], false);
-  assert.deepEqual(plain(p._shop.preview), ["Olio - 10 ml"]);
+  assert.equal("add" in sent[0], false);
+  assert.deepEqual(plain(p._shop.preview), [OLIO]);
+  assert.equal(sent[1].type, "shared_diet/get_category_order"); // loaded with every preview
+}
+{
+  // Spesa grouped by category in the user's order (saved order first, unknown ids dropped, the rest in list order);
+  // empty categories hidden; each row has a category select; "altro" cannot be deleted.
+  const p = new SharedDietPanel();
+  p._render = () => {};
+  p._view = "shop";
+  p._profiles = {};
+  p._hass = { states: {} };
+  p._categories = [{ id: "frutta", name: "Frutta" }, { id: "carne", name: "Carne" }, { id: "nuova", name: "Nuova" }, { id: "altro", name: "Altro" }];
+  p._shop.order = ["carne", "gone", "frutta", "carne"];
+  assert.deepEqual(plain(p._catOrder()), ["carne", "frutta", "nuova", "altro"]);
+  p._shop.preview = [
+    { text: "Mele - 2 pz", food: "Mele", category: "frutta" },
+    { text: "Pollo - 300 g", food: "Pollo", category: "carne" },
+    { text: "Zzz", food: "Zzz", category: "altro" },
+    { text: "Orata", food: "Orata", category: "deleted" }, // stale preview: shown under Altro
+  ];
+  const html = p._body();
+  const heads = [...html.matchAll(/<h3>([^<]+)<\/h3>/g)].map((m) => m[1]);
+  assert.deepEqual(heads, ["Carne", "Frutta", "Altro"]);
+  assert.match(html, /data-ch="sitem" data-i="2"[^]*data-ch="sitem" data-i="3"/); // Orata after Zzz, in Altro
+  assert.match(html, /data-ch="scat" data-i="1" aria-label="Categoria di Pollo"><option value="">Automatica<\/option><option value="carne">/);
+  p._shop.preview[1].manual = true; // hand-picked: selected by name
+  assert.match(p._body(), /aria-label="Categoria di Pollo"><option value="">Automatica<\/option><option value="carne" selected>/);
+  // Categorie tab: one row per category in the user's order (grip, name, delete); "altro" keeps an empty delete cell.
+  assert.doesNotMatch(html, /data-ch="catname"/); // not in Spesa any more
+  const cats = p._vCats();
+  assert.deepEqual([...cats.matchAll(/class="catrow" data-cid="([^"]+)"/g)].map((m) => m[1]), ["carne", "frutta", "nuova", "altro"]);
+  assert.match(cats, /data-act="catdel" data-cid="nuova"/);
+  assert.doesNotMatch(cats, /data-act="catdel" data-cid="altro"/);
+  assert.match(cats, /aria-label="Nome categoria">\s*<span><\/span>\s*<\/div>/); // altro: same columns as the others
+  assert.match(cats, /class="icon grip" data-cid="carne"/);
+  const sent = [];
+  p._hass.callWS = async (m) => { sent.push(plain(m)); return m.type === "shared_diet/set_category_order" ? { order: m.order } : {}; };
+  const toasts = [];
+  p.dispatchEvent = (e) => toasts.push(e.detail.message);
+  p._flash = (m) => { throw new Error(m); };
+  // Arrow keys on a focused grip move its row (keyboard alternative to dragging); focus stays on the grip.
+  let prevented = false;
+  p._gripKey({ key: "ArrowUp", target: { closest: () => ({ dataset: { cid: "altro" } }) }, preventDefault: () => { prevented = true; } });
+  await new Promise((r) => setTimeout(r));
+  assert.equal(prevented, true);
+  assert.deepEqual(sent.at(-1), { type: "shared_diet/set_category_order", order: ["carne", "frutta", "altro", "nuova"] });
+  assert.deepEqual(plain(p._catOrder()), ["carne", "frutta", "altro", "nuova"]);
+  assert.equal(p._focus, '.grip[data-cid="altro"]');
+  p._focus = null;
+  // A move the server refuses goes back to the saved order.
+  const okCall = p._hass.callWS;
+  let flashed = "";
+  p._flash = (m) => { flashed = m; };
+  p._hass.callWS = async () => { throw { message: "Categoria sconosciuta" }; };
+  await p._moveCategory("nuova", -1);
+  assert.deepEqual(plain(p._catOrder()), ["carne", "frutta", "altro", "nuova"]);
+  assert.equal(flashed, "Categoria sconosciuta");
+  // A refused new category keeps its typed name; a created one clears it.
+  p.shadowRoot.getElementById = (id) => (id === "newcat" ? { value: " carne " } : null);
+  await p._addCategory();
+  assert.match(p._vCats(), /id="newcat" maxlength="40" placeholder="Nuova categoria" value="carne"/);
+  p._hass.callWS = okCall;
+  await p._addCategory();
+  assert.match(p._vCats(), /placeholder="Nuova categoria" value=""/);
+  p.shadowRoot.getElementById = () => null;
+  p._flash = (m) => { throw new Error(m); };
+  await p._setFoodCategory(0, "altro"); // the food name, not the row text
+  assert.deepEqual(sent.at(-1), { type: "shared_diet/set_food_category", food: "Mele", category_id: "altro" });
+  const before = sent.length;
+  await p._setFoodCategory(0, ""); // already automatic: nothing sent
+  await p._renameCategory("carne", { value: "  Carne " });
+  assert.equal(sent.length, before);
+  // A push while typing in a category field does not re-render (it would wipe the text); the next action catches up.
+  let renders = 0;
+  const realRender = p._render;
+  p._render = () => { renders++; };
+  p._view = "cats";
+  p.shadowRoot.activeElement = { matches: (sel) => sel.includes("#newcat") };
+  p._onData({}, {}, p._categories);
+  assert.equal(renders, 0);
+  assert.equal(p._shop.stale, true);
+  p.shadowRoot.activeElement = null;
+  await p._run(async () => {});
+  assert.equal(p._shop.stale, false);
+  assert.ok(renders > 0);
+  p._render = realRender;
+  p._view = "shop";
+  await p._setFoodCategory(1, ""); // back to automatic
+  assert.deepEqual(sent.at(-1), { type: "shared_diet/set_food_category", food: "Pollo", category_id: null });
+  await p._renameCategory("carne", { value: " Macelleria " });
+  assert.deepEqual(sent.at(-1), { type: "shared_diet/rename_category", category_id: "carne", name: "Macelleria" });
+  // Toasts carry text only: no toast for a category change, the fixed text for a rename (not the reply object).
+  assert.deepEqual(toasts.filter((t) => typeof t !== "string"), []);
+  assert.equal(toasts.at(-1), "Categoria rinominata");
 }
 {
   // Oggi: all profiles, grouped by meal name (case/spaces ignored); totals summed per food+unit and per recipe ingredient;
@@ -805,7 +907,7 @@ const RECIPES = {
   s._view = "shop";
   await s._loadShop(); // no data yet: no throw
   s._profiles = { p1: { id: "p1", name: "Luca", week: {}, exceptions: {} } };
-  s._hass = { states: { "todo.spesa": { attributes: {} } }, callWS: async () => ({ items: ["Pasta - 400 g"] }) };
+  s._hass = { states: { "todo.spesa": { attributes: {} } }, callWS: async () => ({ items: [{ text: "Pasta - 400 g", food: "Pasta", category: "altro" }] }) };
   s._shop.preview = ["Pasta - 200 g"];
   s._shop.skip.add("Pasta - 200 g");
   const loading = s._loadShop();
@@ -819,13 +921,12 @@ const RECIPES = {
   await loading;
   const flashes = [];
   s._flash = (t) => flashes.push(t);
-  let fail;
-  s._hass.callWS = () => new Promise((_, rej) => { fail = rej; });
+  const fails = [];
+  s._hass.callWS = () => new Promise((_, rej) => { fails.push(rej); });
   const stale = s._loadShop();
-  const failStale = fail;
   s._hass.callWS = async () => { throw { message: "Intervallo non valido" }; };
   await s._loadShop();
-  failStale({ message: "vecchio" });
+  fails.forEach((f) => f({ message: "vecchio" }));
   await stale;
   assert.deepEqual(flashes, ["Intervallo non valido"]);
   assert.match(s._body(), /Impossibile calcolare la spesa\./);
@@ -931,5 +1032,76 @@ const RECIPES = {
   const admin = p._body();
   assert.doesNotMatch(admin, /class="ro"/);
   assert.equal((admin.match(/data-act="delprofile"/g) ?? []).length, 3);
+}
+{
+  // Lista: the todo entity's live items grouped by category in the user's order, checkbox or card view; ticking completes
+  // the item in the todo entity; ticked items go under Completati.
+  const p = new SharedDietPanel();
+  p._render = () => {};
+  p._flash = (m) => { throw new Error(m); };
+  p._profiles = {};
+  p._categories = [{ id: "carne", name: "Carne" }, { id: "frutta", name: "Frutta" }, { id: "altro", name: "Altro" }];
+  let push, unsubbed = 0;
+  const ws = [], services = [];
+  p._hass = {
+    states: {},
+    entities: { "todo.spesa": { entity_id: "todo.spesa", platform: "shared_diet" }, "todo.other": { entity_id: "todo.other", platform: "local_todo" } },
+    connection: { subscribeMessage: async (cb, m) => { ws.push(plain(m)); push = cb; return () => { unsubbed++; }; } },
+    callWS: async (m) => {
+      ws.push(plain(m));
+      if (m.type === "shared_diet/get_category_order") return { order: ["frutta"] };
+      if (m.type === "frontend/get_user_data") return { value: { listView: "check" } };
+      if (m.type === "frontend/set_user_data") return {};
+      return { categories: m.texts.map((t) => (t.startsWith("Pollo") ? "carne" : t.startsWith("Mele") ? "frutta" : "altro")) };
+    },
+    callService: async (...a) => { services.push(plain(a)); },
+  };
+  p._view = "list";
+  p._listWatch();
+  await new Promise((r) => setTimeout(r));
+  assert.deepEqual(ws.find((m) => m.type === "todo/item/subscribe"), { type: "todo/item/subscribe", entity_id: "todo.spesa" });
+  assert.match(p._body(), /Caricamento/);
+  await push({ items: [
+    { uid: "1", summary: "Pollo - 300 g", status: "needs_action" },
+    { uid: "2", summary: "Mele - 2 pz", status: "needs_action" },
+    { uid: "3", summary: "Detersivo", status: "needs_action" },
+    { uid: "4", summary: "Sale (q.b.)", status: "completed" },
+  ] });
+  let html = p._body();
+  assert.deepEqual([...html.matchAll(/<h3>([^ <]+)/g)].map((m) => m[1]), ["Frutta", "Carne", "Altro"]); // saved order first
+  assert.match(html, /<section class="lgroup">/);
+  assert.match(html, /<summary>Completati \(1\)<\/summary><label class="check"><input type="checkbox" data-ch="litem" data-uid="4" checked>/);
+  assert.match(html, /aria-pressed="true">Checkbox/);
+  p._onClick({ target: { closest: () => ({ dataset: { act: "lview", v: "card" } }) } });
+  // Saved per HA user (frontend user data, server side), not per browser; read back when the panel loads.
+  await new Promise((r) => setTimeout(r));
+  assert.deepEqual(ws.at(-1), { type: "frontend/set_user_data", key: "shared_diet", value: { listView: "card" } });
+  const q = new SharedDietPanel();
+  q._render = () => {};
+  q._hass = { callWS: async (m) => (m.type === "frontend/get_user_data" ? { value: { listView: "card" } } : {}) };
+  await q._loadPrefs();
+  assert.equal(q._todoList.view, "card");
+  html = p._body();
+  assert.match(html, /class="lcard" data-act="litem" data-uid="2"/);
+  // Completed items follow the view too: faded cards that reopen on tap.
+  assert.match(html, /<summary>Completati \(1\)<\/summary><div class="lcards"><button class="lcard done" data-act="litem" data-uid="4" aria-label="Riapri Sale/);
+  await p._toggleItem("2");
+  assert.deepEqual(services.at(-1), ["todo", "update_item", { item: "2", status: "completed" }, { entity_id: "todo.spesa" }]);
+  assert.match(p._body(), /Completati \(2\)/);
+  // A refused update goes back.
+  p._hass.callService = async () => { throw { message: "Non autorizzato" }; };
+  let flashed = "";
+  p._flash = (m) => { flashed = m; };
+  await p._toggleItem("1");
+  assert.equal(p._todoList.items[0].status, "needs_action");
+  assert.equal(flashed, "Non autorizzato");
+  // Only unseen texts are classified; leaving the tab ends the subscription.
+  const asked = ws.filter((m) => m.type === "shared_diet/categorize").length;
+  await push({ items: [...p._todoList.items, { uid: "5", summary: "Mele - 2 pz", status: "needs_action" }] });
+  assert.equal(ws.filter((m) => m.type === "shared_diet/categorize").length, asked);
+  p._view = "today";
+  p._listWatch();
+  await new Promise((r) => setTimeout(r));
+  assert.equal(unsubbed, 1);
 }
 console.log("resolve.test.mjs: all assertions passed");
