@@ -1407,7 +1407,8 @@ class SharedDietPanel extends HTMLElement {
       order.map((id) => `<option value="${esc(id)}"${id === sel ? " selected" : ""}>${esc(names[id])}</option>`).join("");
     // One group per category in this user's order; empty categories are left out.
     const groups = order.map((cid) => {
-      const group = (rows ?? []).map((r, i) => [r, i]).filter(([r]) => r.category === cid);
+      // A row from a stale preview may name a category deleted since: it shows under "altro" rather than vanish.
+      const group = (rows ?? []).map((r, i) => [r, i]).filter(([r]) => (order.includes(r.category) ? r.category : "altro") === cid);
       return group.length ? `<h3>${esc(names[cid])}</h3>${group.map(([r, i]) =>
         `<div class="check shoprow"><label class="check"><input type="checkbox" role="switch" class="switch" data-ch="sitem" data-i="${i}"${
           this._shop.skip.has(r.text) ? "" : " checked"}> ${esc(r.text)}</label>

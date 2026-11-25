@@ -594,7 +594,8 @@ const RECIPES = {
   assert.match(p._body(), /data-act="shop" disabled/);
   // The add call excludes skipped rows; no todo entity = preview only.
   const sent = [];
-  p._hass.callWS = async (m) => { sent.push(m); return { items: ["Olio - 10 ml"] }; };
+  const OLIO = { text: "Olio - 10 ml", food: "Olio", category: "condimenti" };
+  p._hass.callWS = async (m) => { sent.push(m); return { items: [OLIO] }; };
   p._shop.skip = new Set(["Pasta - 80 g"]);
   p.dispatchEvent = () => {};
   p._flash = (m) => { throw new Error(m); };
@@ -603,7 +604,7 @@ const RECIPES = {
   assert.equal(sent[0].todo_entity_id, "todo.spesa");
   await p._loadShop();
   assert.equal("todo_entity_id" in sent[1], false);
-  assert.deepEqual(plain(p._shop.preview), ["Olio - 10 ml"]);
+  assert.deepEqual(plain(p._shop.preview), [OLIO]);
   assert.equal(sent[2].type, "shared_diet/get_category_order"); // loaded with every preview
 }
 {
@@ -621,10 +622,12 @@ const RECIPES = {
     { text: "Mele - 2 pz", food: "Mele", category: "frutta" },
     { text: "Pollo - 300 g", food: "Pollo", category: "carne" },
     { text: "Zzz", food: "Zzz", category: "altro" },
+    { text: "Orata", food: "Orata", category: "deleted" }, // stale preview: shown under Altro
   ];
   const html = p._body();
   const heads = [...html.matchAll(/<h3>([^<]+)<\/h3>/g)].map((m) => m[1]);
   assert.deepEqual(heads, ["Carne", "Frutta", "Altro"]);
+  assert.match(html, /data-ch="sitem" data-i="2"[^]*data-ch="sitem" data-i="3"/); // Orata after Zzz, in Altro
   assert.match(html, /data-ch="scat" data-i="1" aria-label="Categoria di Pollo"><option value="">Automatica<\/option><option value="carne">/);
   p._foodCats = { pollo: "carne" }; // hand-picked: selected by name
   assert.match(p._body(), /aria-label="Categoria di Pollo"><option value="">Automatica<\/option><option value="carne" selected>/);
@@ -880,7 +883,7 @@ const RECIPES = {
   s._view = "shop";
   await s._loadShop(); // no data yet: no throw
   s._profiles = { p1: { id: "p1", name: "Luca", week: {}, exceptions: {} } };
-  s._hass = { states: { "todo.spesa": { attributes: {} } }, callWS: async () => ({ items: ["Pasta - 400 g"] }) };
+  s._hass = { states: { "todo.spesa": { attributes: {} } }, callWS: async () => ({ items: [{ text: "Pasta - 400 g", food: "Pasta", category: "altro" }] }) };
   s._shop.preview = ["Pasta - 200 g"];
   s._shop.skip.add("Pasta - 200 g");
   const loading = s._loadShop();
