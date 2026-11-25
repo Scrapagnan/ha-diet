@@ -50,6 +50,13 @@ class MealSensor(SensorEntity):
             self._meal = current_and_next(self._profile, dt_util.now(), recipes)[self._index]
         self.async_write_ha_state()
 
+    def _person(self) -> str | None:
+        """The person entity of the profile's HA user, if any."""
+        user_id = self._profile["user_id"] if self._profile else None
+        if user_id is None:
+            return None
+        return next((s.entity_id for s in self.hass.states.async_all("person") if s.attributes.get("user_id") == user_id), None)
+
     @property
     def native_value(self) -> str | None:
         return self._meal["name"] if self._meal else None
@@ -62,7 +69,7 @@ class MealSensor(SensorEntity):
             "items": [format_item(i) for i in meal["items"]] if meal else [],
             "option": meal["option"] if meal else None,
             "profile_id": self._profile_id,
-            "person": self._profile["person"] if self._profile else None,
+            "person": self._person(),
         }
 
 

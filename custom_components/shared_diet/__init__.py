@@ -50,7 +50,7 @@ async def _send_reminders(hass: HomeAssistant, store: DietStore) -> None:
     for profile in data["profiles"].values():
         try:
             reminder = profile["reminder"]
-            if not (reminder["enabled"] and reminder["notify"]):
+            if profile["disabled"] or not (reminder["enabled"] and reminder["notify"]):
                 continue
             target = now + timedelta(minutes=reminder["minutes"])
             hhmm = target.strftime("%H:%M")

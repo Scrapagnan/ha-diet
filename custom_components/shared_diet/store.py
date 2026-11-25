@@ -50,7 +50,8 @@ def _new_profile(name: str, user_id: str | None) -> dict:
         "id": uuid.uuid4().hex,
         "name": name,
         "user_id": user_id,  # owning HA user; None for profiles created before users had one
-        "person": None,
+        "person": None,  # only used to link profiles created before users had one (async_sync_users)
+        "disabled": False,  # set by an admin: week and choices frozen, no reminders, left out of today and shopping
         "reminder": {"enabled": False, "minutes": 15, "notify": None},
         "week": {str(day): [] for day in range(7)},
         "exceptions": {},
@@ -94,6 +95,7 @@ class DietStore:
         for profile in self._profiles.values():
             profile.setdefault("recipe_qty", {})
             profile.setdefault("user_id", None)
+            profile.setdefault("disabled", False)
         for recipe in self._recipes.values():
             for ing in recipe["ingredients"]:
                 if "food" in ing and "alts" not in ing:  # pre-alternatives flat ingredient
@@ -172,6 +174,10 @@ class DietStore:
             raise ConflictError(profile["id"])
         saved = copy.deepcopy(profile)
         saved["user_id"] = current["user_id"]  # ownership is not the client's to change
+        saved["disabled"] = current["disabled"]  # only async_set_disabled changes it
+        if current["disabled"]:  # a disabled profile keeps its week and choices; name and reminder stay editable
+            for key in ("week", "exceptions", "choices", "recipe_qty"):
+                saved[key] = copy.deepcopy(current[key])
         for alt in _alts(saved):
             if "recipe" in alt and alt["recipe"] not in self._recipes:
                 raise UnknownRecipeError(alt["recipe"])
@@ -185,6 +191,14 @@ class DietStore:
         self._profiles[saved["id"]] = saved
         await self._async_commit()
         return copy.deepcopy(saved)
+
+    async def async_set_disabled(self, profile_id: str, disabled: bool) -> None:
+        profile = self._profiles.get(profile_id)
+        if profile is None:
+            raise KeyError(profile_id)
+        if profile["disabled"] != disabled:
+            profile["disabled"] = disabled  # no rev bump: an open draft of it must still save
+            await self._async_commit()
 
     async def async_delete_profile(self, profile_id: str) -> None:
         if self._profiles.pop(profile_id, None) is None:

@@ -312,3 +312,38 @@ def test_huge_int_qty_is_invalid_not_overflow():
     # orjson rejects >64-bit ints on the wire, so this guard is only reachable directly.
     with pytest.raises(vol.Invalid):
         _qty(10**400)
+
+
+async def test_only_admin_disables_profiles(hass, hass_ws_client, client):
+    profile = own_profile(client)
+    resp = await call(client, "set_profile_disabled", profile_id=profile["id"], disabled=True)
+    assert resp["error"]["code"] == "unauthorized"
+    admin = await _user_client(hass, hass_ws_client, "Boss", "system-admin")
+    resp = await call(admin, "set_profile_disabled", profile_id="nope", disabled=True)
+    assert resp["error"]["code"] == "not_found"
+    resp = await call(admin, "set_profile_disabled", profile_id=profile["id"], disabled=True)
+    assert resp["success"]
+    saved = client.store.profiles[profile["id"]]
+    assert saved["disabled"] is True and saved["rev"] == profile["rev"]  # no rev bump: open drafts still save
+
+
+async def test_disabled_profile_keeps_week_but_saves_name(hass, hass_ws_client, client):
+    admin = await _user_client(hass, hass_ws_client, "Boss", "system-admin")
+    profile = own_profile(client)
+    assert (await call(admin, "set_profile_disabled", profile_id=profile["id"], disabled=True))["success"]
+    edited = {**full_profile(profile), "name": "Nuovo"}
+    resp = await call(client, "save_profile", profile=edited)
+    assert resp["success"], resp
+    saved = resp["result"]["profile"]
+    assert saved["name"] == "Nuovo" and saved["reminder"] == edited["reminder"]
+    assert saved["week"] == profile["week"] and saved["exceptions"] == {} and saved["disabled"] is True
+
+
+async def test_shopping_skips_disabled_profiles(hass, hass_ws_client, client):
+    profile = own_profile(client)
+    profile["week"]["0"] = [meal("pasta", "12:00", [[{"alts": [item("Pasta", 80.0)]}]])]
+    assert (await call(client, "save_profile", profile=profile))["success"]
+    await client.store.async_set_disabled(profile["id"], True)
+    for ids in (None, [profile["id"]]):
+        resp = await call(client, "shopping", start=MONDAY.isoformat(), end=MONDAY.isoformat(), profile_ids=ids)
+        assert resp["result"]["items"] == []

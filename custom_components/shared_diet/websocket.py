@@ -173,6 +173,7 @@ PROFILE_SCHEMA = vol.Schema(
         vol.Required("name"): NON_EMPTY,
         # Sent back by the panel's merge after a conflict; ignored: the store keeps the owner it has.
         vol.Optional("user_id"): vol.Any(None, str),
+        vol.Optional("disabled"): bool,  # likewise ignored: only set_profile_disabled changes it
         vol.Required("person"): PERSON,
         vol.Required("reminder"): {
             vol.Required("enabled"): bool,
@@ -267,6 +268,27 @@ async def ws_delete_profile(hass: HomeAssistant, connection: websocket_api.Activ
 
 
 @websocket_api.websocket_command(
+    {
+        vol.Required("type"): "shared_diet/set_profile_disabled",
+        vol.Required("profile_id"): str,
+        vol.Required("disabled"): bool,
+    }
+)
+@websocket_api.require_admin
+@websocket_api.async_response
+async def ws_set_profile_disabled(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
+    store = _store(hass, connection, msg)
+    if store is None:
+        return
+    try:
+        await store.async_set_disabled(msg["profile_id"], msg["disabled"])
+    except KeyError:
+        connection.send_error(msg["id"], "not_found", "Profilo non trovato")
+        return
+    connection.send_result(msg["id"], {})
+
+
+@websocket_api.websocket_command(
     {vol.Required("type"): "shared_diet/create_recipe", vol.Required("name"): RECIPE_NAME}
 )
 @websocket_api.async_response
@@ -354,6 +376,7 @@ async def ws_shopping(hass: HomeAssistant, connection: websocket_api.ActiveConne
             connection.send_error(msg["id"], "not_found", "Profilo non trovato")
             return
         selected = [profiles[pid] for pid in dict.fromkeys(msg["profile_ids"])]
+    selected = [p for p in selected if not p["disabled"]]
 
     items = shopping_items(selected, start, end, data["recipes"], data["categories"], data["food_categories"])
     position = {cid: i for i, cid in enumerate(store.category_order(connection.user.id))}
@@ -514,6 +537,7 @@ COMMANDS = (
     ws_subscribe,
     ws_save_profile,
     ws_delete_profile,
+    ws_set_profile_disabled,
     ws_create_recipe,
     ws_save_recipe,
     ws_delete_recipe,

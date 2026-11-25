@@ -261,3 +261,23 @@ async def test_reminder_message_contains_recipe_text(hass, freezer):
     assert len(calls) == 1
     assert calls[0].data["title"] == "Luca: Pancake alle 13:00"
     assert calls[0].data["message"] == "Pancake: Farina 40 g, Uova 1 pz"
+
+
+async def test_reminder_skipped_for_disabled_profile(hass, freezer):
+    calls = async_mock_service(hass, "notify", "mobile_app_x")
+    freezer.move_to(at(10, 30))
+    store, profile_id = await _setup_luca(hass, notify="notify.mobile_app_x")
+    await store.async_set_disabled(profile_id, True)
+    freezer.move_to(at(12, 45))
+    async_fire_time_changed(hass, at(12, 45))
+    await hass.async_block_till_done()
+    assert calls == []
+
+
+async def test_sensor_person_is_the_owner_users_person(hass, freezer):
+    freezer.move_to(at(10, 30))
+    user = await hass.auth.async_create_user("Luca", group_ids=["system-users"])
+    hass.states.async_set("person.luca", "home", {"user_id": user.id})
+    hass.states.async_set("person.altro", "home", {"user_id": "someone"})
+    await _setup_entry(hass)
+    assert hass.states.get("sensor.luca_pasto_attuale").attributes["person"] == "person.luca"
