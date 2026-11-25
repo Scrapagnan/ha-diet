@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -19,7 +20,7 @@ from homeassistant.helpers.start import async_at_started
 from homeassistant.util import dt as dt_util
 
 from . import websocket
-from .const import DOMAIN, PANEL_URL, VERSION
+from .const import DOMAIN, PANEL_URL
 from .model import choice_for, effective_day, format_item, resolve_meal
 from .store import DietStore
 
@@ -28,6 +29,7 @@ _LOGGER = logging.getLogger(__name__)
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 PLATFORMS = [Platform.SENSOR]
 STATIC_URL = "/shared_diet_static"
+PANEL_JS = Path(__file__).parent / "frontend" / "shared-diet-panel.js"
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
@@ -95,11 +97,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     store = hass.data[DOMAIN]
     entry.runtime_data = store
 
+    # The URL changes with the file's content: browsers otherwise keep an old panel against a newer server.
+    digest = await hass.async_add_executor_job(lambda: hashlib.sha256(PANEL_JS.read_bytes()).hexdigest()[:12])
     await async_register_panel(
         hass,
         webcomponent_name="shared-diet-panel",
         frontend_url_path=PANEL_URL,
-        module_url=f"{STATIC_URL}/shared-diet-panel.js?v={VERSION}",
+        module_url=f"{STATIC_URL}/shared-diet-panel.js?v={digest}",
         sidebar_title="Dieta",
         sidebar_icon="mdi:food-apple",
         require_admin=False,
