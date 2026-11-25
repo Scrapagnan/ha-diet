@@ -72,6 +72,21 @@ async def test_sensors_reflect_current_and_next(hass, freezer):
     assert nxt.attributes["items"] == ["Pasta integrale 80 g", "Olio (q.b.)"]
 
 
+async def test_sensor_widget_summary(hass, freezer):
+    """summary: one ready line for phone widgets, for the current and the next meal."""
+    freezer.move_to(at(10, 30))
+    await _setup_luca(hass)
+    assert hass.states.get("sensor.luca_prossimo_pasto").attributes["summary"] == "Pranzo 13:00 - Pasta integrale 80 g, Olio (q.b.)"
+    assert hass.states.get("sensor.luca_pasto_attuale").attributes["summary"] == "Colazione 07:30 - Latte 200 ml"
+
+
+async def test_sensor_widget_summary_without_meal(hass, freezer):
+    freezer.move_to(at(10, 30))
+    store = await _setup_entry(hass)
+    await _add_profile(hass, store, "Luca", [])
+    assert hass.states.get("sensor.luca_prossimo_pasto").attributes["summary"] is None
+
+
 async def test_reminder_sent_minutes_before(hass, freezer):
     calls = async_mock_service(hass, "notify", "mobile_app_x")
     freezer.move_to(at(10, 30))
