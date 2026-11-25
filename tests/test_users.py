@@ -82,3 +82,16 @@ async def test_person_of_a_user_with_a_profile_is_not_linked_twice(hass):
     hass.states.async_set("person.erin", "home", {"user_id": erin.id})
     await store.async_sync_users({erin.id: "Erin"}, {"person.erin": erin.id})
     assert store.profiles[extra["id"]]["user_id"] is None
+
+
+async def test_profiles_of_users_removed_while_unloaded_are_deleted(hass):
+    await hass.auth.async_create_user("Owner", group_ids=["system-admin"])
+    fede = await hass.auth.async_create_user("Fede", group_ids=["system-users"])
+    await _setup(hass)
+    entry = hass.config_entries.async_entries(DOMAIN)[0]
+    gone = _by_user(hass)[fede.id]["id"]
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.auth.async_remove_user(fede)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert gone not in hass.data[DOMAIN].profiles

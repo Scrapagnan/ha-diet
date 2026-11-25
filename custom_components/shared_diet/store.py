@@ -110,7 +110,10 @@ class DietStore:
 
     async def async_sync_users(self, users: dict[str, str], person_users: dict[str, str]) -> None:
         """Gives every user (id -> name) a profile: first by linking an unowned profile whose person belongs to
-        the user (person entity -> user id), else a new one. Idempotent."""
+        the user (person entity -> user id), else a new one. Profiles of users that no longer exist (removed while
+        the integration was not loaded) are deleted. Idempotent."""
+        for profile_id in [pid for pid, p in self._profiles.items() if p["user_id"] and p["user_id"] not in users]:
+            await self.async_delete_profile(profile_id)
         owned = {p["user_id"] for p in self._profiles.values()}
         changed = False
         for profile in self._profiles.values():

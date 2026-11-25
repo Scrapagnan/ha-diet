@@ -686,7 +686,8 @@ class SharedDietPanel extends HTMLElement {
 
   _deleteProfile(id = this._profileId) {
     if (!this._profiles[id]) return;
-    if (!confirm(`Eliminare il profilo «${this._profiles[id].name}»? L'operazione non si annulla.`)) return;
+    const back = this._profiles[id].user_id ? " Il profilo dell'utente verrà ricreato vuoto." : "";
+    if (!confirm(`Eliminare il profilo «${this._profiles[id].name}»? L'operazione non si annulla.${back}`)) return;
     return this._run(async () => {
       await this._hass.callWS({ type: "shared_diet/delete_profile", profile_id: id });
       if (this._profileId === id) {
@@ -1423,7 +1424,8 @@ class SharedDietPanel extends HTMLElement {
         <label class="sub-row">Servizio notifica ${select("rem.notify", p.reminder.notify, notifies, "Nessuno")}</label>
         ${remindGrid(p, pid)}` : ""}`;
       const editable = this._canEdit(this._profiles[id]);
-      // Profiles are created per HA user; only an admin may delete one (it returns with a restart while its user exists).
+      // Profiles are created per HA user; only an admin may delete one. While its user exists it comes back empty
+      // at the next restart or user addition.
       const buttons = (editable ? `<button class="primary" data-act="save" ${pid}${dirty ? "" : " hidden"}${this._busy ? " disabled" : ""}>Salva</button>` : "")
         + (this._hass.user?.is_admin ? `<button class="danger" data-act="delprofile" ${pid}>Elimina profilo</button>` : "");
       return `<section class="card">

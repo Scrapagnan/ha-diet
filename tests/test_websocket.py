@@ -192,6 +192,13 @@ async def test_non_admin_cannot_save_another_profile(hass, hass_ws_client, clien
         assert resp["result"]["profile"]["user_id"] == owner
 
 
+async def test_client_cannot_change_profile_owner(client):
+    """The panel's conflict merge sends user_id back: it is accepted and ignored."""
+    resp = await call(client, "save_profile", profile={**own_profile(client), "user_id": "someone-else"})
+    assert resp["success"], resp
+    assert resp["result"]["profile"]["user_id"] == client.user_id
+
+
 async def test_profiles_are_not_created_by_hand(client):
     resp = await call(client, "create_profile", name="X")
     assert resp["error"]["code"] == "unknown_command"

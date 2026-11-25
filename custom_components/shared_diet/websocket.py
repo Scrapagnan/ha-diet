@@ -158,6 +158,8 @@ PROFILE_SCHEMA = vol.Schema(
     {
         vol.Required("id"): NON_EMPTY,
         vol.Required("name"): NON_EMPTY,
+        # Sent back by the panel's merge after a conflict; ignored: the store keeps the owner it has.
+        vol.Optional("user_id"): vol.Any(None, str),
         vol.Required("person"): PERSON,
         vol.Required("reminder"): {
             vol.Required("enabled"): bool,
@@ -216,7 +218,7 @@ async def ws_save_profile(hass: HomeAssistant, connection: websocket_api.ActiveC
     store = _store(hass, connection, msg)
     if store is None:
         return
-    current = store.snapshot()["profiles"].get(msg["profile"]["id"])
+    current = store.profile(msg["profile"]["id"])
     if current is not None and not connection.user.is_admin and current["user_id"] != connection.user.id:
         connection.send_error(msg["id"], websocket_api.ERR_UNAUTHORIZED, "Puoi modificare solo il tuo profilo")
         return
