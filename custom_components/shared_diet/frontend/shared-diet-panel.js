@@ -90,12 +90,19 @@ details p { white-space: pre-line; margin: 6px 0; }
 .shoprow { justify-content: space-between; flex-wrap: nowrap; }
 .shoprow label { margin: 0; min-width: 0; }
 .shoprow select { flex: 0 1 160px; }
+.shoprow > label { flex: 1 1 auto; }
+.sqty { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+.sqty input { width: 80px; }
+.sqty .unit { min-width: 2.5em; }
+.nqty { width: 80px; }
+.nunit { width: 72px; }
 .lgroup { margin-top: 24px; padding-top: 12px; border-top: 2px solid var(--divider-color, #e0e0e0); }
 .lgroup h3 { margin: 0 0 8px; }
 .page-head .chips .chip { flex: 0 0 auto; padding: 6px 12px; }
 .lcards { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
 .lcard { min-height: 64px; text-align: left; white-space: normal; border-radius: 12px;
   background: var(--card-background-color, #fff); box-shadow: 0 1px 3px rgba(0, 0, 0, .2); }
+.lcard .lqty { display: block; font-size: 0.85em; opacity: 0.75; margin-top: 2px; }
 .lcard.done { opacity: 0.55; text-decoration: line-through; box-shadow: none; }
 details.lgroup .lcards { margin-top: 8px; }
 .or { font-size: 12px; font-weight: 600; text-align: center; color: var(--secondary-text-color, #727272); }
@@ -136,6 +143,36 @@ const pad = (n) => String(n).padStart(2, "0");
 const iso = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const parseIso = (s) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
 const addDays = (s, n) => { const d = parseIso(s); d.setDate(d.getDate() + n); return iso(d); };
+// Card text of a list item: the food, then its quantity on a smaller line ("Pollo - 1,05 kg", "Sale (q.b.)").
+// Same split as the server's food_of; items typed by hand stay whole.
+const splitQty = (s) => s.match(/^(.+?) - (\d[\d.,e+-]*(?: .*)?)$/) ?? s.match(/^(.+) \(([^()]*)\)$/);
+const cardText = (s) => { const m = splitQty(s); return m ? `${esc(m[1])}<span class="lqty">${esc(m[2])}</span>` : esc(s); };
+
+// Text fields a push must not re-render under the user's typing (see _onData and focusout).
+const TYPING = '[data-ch="catname"], #newcat, #newitem, #newqty, #newunit';
+
+const MAX_SHOP_QTY = 100000; // as the server's cap on an edited shopping quantity
+
+// Text of an item typed by hand with a quantity, as the server writes diet rows: "Latte - 1,5 l", over 1000 g in kg.
+const shopText = (food, qty, unit) => {
+  if (unit.toLowerCase() === "g" && qty > 1000) [qty, unit] = [qty / 1000, "kg"];
+  return `${food} - ${String(+qty.toPrecision(6)).replace(".", ",")}${unit ? ` ${unit}` : ""}`;
+};
+
+// Edited quantities to send with "Aggiungi alla lista": {row text: qty} for selected rows with a quantity whose field
+// was changed. An empty field keeps the computed quantity; anything else must be a number > 0.
+function shopQty(rows, edits, skip) {
+  const out = {};
+  for (const r of rows ?? []) {
+    const raw = edits.get(r.text);
+    if (r.qty === null || skip.has(r.text) || raw === undefined || String(raw).trim() === "") continue;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0 || n > MAX_SHOP_QTY) throw new Error(`Quantità non valida per ${r.food}`);
+    if (n !== r.qty) out[r.text] = n;
+  }
+  return out;
+}
+
 // Shopping range for a cadence, starting today: 7 or 14 days, or up to the day before the same date next month.
 const cadenceRange = (cadence, from = iso(new Date())) => {
   if (cadence !== "1m") return { from, to: addDays(from, cadence === "2w" ? 13 : 6) };
@@ -381,7 +418,7 @@ class SharedDietPanel extends HTMLElement {
     this._wday = weekday(today); // Settimana and Scelte views
     let cadence = "1w";
     try { cadence = localStorage.getItem("shared_diet.cadence") ?? "1w"; } catch { /* storage blocked */ }
-    this._shop = { cadence: CADENCES.some(([k]) => k === cadence) ? cadence : "1w", off: new Set(), preview: null, skip: new Set(), seq: 0, order: [] };
+    this._shop = { cadence: CADENCES.some(([k]) => k === cadence) ? cadence : "1w", off: new Set(), preview: null, skip: new Set(), qty: new Map(), seq: 0, order: [] };
     // Lista tab: live items of the family todo entity, each with its category (by item text).
     this._todoList = { view: "check", entity: "", items: null, cats: new Map(), unsub: null };
     this.shadowRoot.addEventListener("click", (e) => this._onClick(e));
@@ -393,14 +430,20 @@ class SharedDietPanel extends HTMLElement {
     this.shadowRoot.addEventListener("keydown", (e) => this._suggKey(e));
     this.shadowRoot.addEventListener("pointerdown", (e) => this._dragStart(e));
     this.shadowRoot.addEventListener("keydown", (e) => this._gripKey(e));
+    this.shadowRoot.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && ["newitem", "newqty", "newunit"].includes(e.target.id) && !this._busy) this._addListItem();
+    });
     this.shadowRoot.addEventListener("focusout", (e) => {
       if (e.target.classList?.contains("food")) this._hideSugg();
       // Left a category field for nothing clickable in the panel: catch up on the pushes skipped while typing.
       // Towards a button, the action it runs renders instead (a render now would swallow the click).
-      if (this._shop.stale && !e.relatedTarget && e.target.matches?.('[data-ch="catname"], #newcat')) {
+      if (this._shop.stale && !e.relatedTarget && e.target.matches?.(TYPING)) {
         this._shop.stale = false;
         this._render();
       }
+      // Same for a Spesa quantity field: the preview reload skipped while typing runs once focus leaves it for nothing
+      // clickable. ponytail: towards another field or control it waits for the next reload (tab switch, push, change).
+      if (this._shop.reload && !e.relatedTarget && e.target.matches?.('[data-ch="sqty"]')) this._loadShop();
     });
   }
 
@@ -548,8 +591,12 @@ class SharedDietPanel extends HTMLElement {
         return;
       }
     }
-    if (this._view === "cats" && this.shadowRoot.activeElement?.matches?.('[data-ch="catname"], #newcat')) {
+    if (["cats", "list"].includes(this._view) && this.shadowRoot.activeElement?.matches?.(TYPING)) {
       this._shop.stale = true; // rendered when the field is left (focusout) or by the next action (_run)
+      return;
+    }
+    if (this._view === "shop" && this.shadowRoot.activeElement?.matches?.('[data-ch="sqty"]')) {
+      this._shop.reload = true; // a reload re-renders the rows: never under the user's typing (see focusout)
       return;
     }
     if (this._view === "shop") this._loadShop();
@@ -842,7 +889,7 @@ class SharedDietPanel extends HTMLElement {
     const view = this._view;
     this._hass.callWS({ type: "shared_diet/get_category_order" }).then((r) => {
       this._shop.order = r.order;
-      const typing = this.shadowRoot.activeElement?.matches?.('[data-ch="catname"], #newcat');
+      const typing = this.shadowRoot.activeElement?.matches?.(TYPING);
       if (this._view === view && !this._busy && !typing) this._render();
     }, () => {});
   }
@@ -868,7 +915,28 @@ class SharedDietPanel extends HTMLElement {
         this._flash(err?.message || "Impossibile classificare la lista");
       }
     }
-    if (entity === this._todoList.entity && this._view === "list" && !this._busy) this._render();
+    if (entity !== this._todoList.entity || this._view !== "list" || this._busy) return;
+    if (this.shadowRoot.activeElement?.matches?.(TYPING)) this._shop.stale = true; // rendered on focusout, not under typing
+    else this._render();
+  }
+
+  // An item typed by hand, outside the diet: added to the family list, the field kept focused for the next one.
+  _addListItem() {
+    const val = (id) => this.shadowRoot.getElementById(id)?.value.trim() ?? "";
+    const [name, rawQty, unit] = [val("newitem"), val("newqty"), val("newunit")];
+    if (!name) return this._flash("Scrivi l'articolo da aggiungere");
+    const qty = Number(rawQty);
+    const badQty = this.shadowRoot.getElementById("newqty")?.validity?.badInput || (rawQty && !(qty > 0 && qty <= MAX_SHOP_QTY));
+    if (badQty) return this._flash("Quantità non valida");
+    if (unit && !rawQty) return this._flash("Indica la quantità per l'unità");
+    // Survive the re-renders; cleared only once added.
+    Object.assign(this._todoList, { newItem: name, newQty: rawQty, newUnit: unit });
+    this._focus = "#newitem";
+    const text = rawQty ? shopText(name, qty, unit) : name;
+    return this._run(async () => {
+      await this._hass.callService("todo", "add_item", { item: text }, { entity_id: this._todoList.entity });
+      Object.assign(this._todoList, { newItem: "", newQty: "", newUnit: "" });
+    }, "Articolo aggiunto");
   }
 
   // Ticks or unticks a todo item; shown at once, confirmed by the subscription.
@@ -899,6 +967,7 @@ class SharedDietPanel extends HTMLElement {
   async _loadShop() {
     if (!this._profiles) return; // _onData loads it once the data arrives
     const seq = ++this._shop.seq;
+    this._shop.reload = false;
     const msg = this._shopMsg();
     this._shop.preview = null;
     this._shop.failed = false;
@@ -934,8 +1003,15 @@ class SharedDietPanel extends HTMLElement {
     if (!this._shop.preview || this._shop.failed) return;
     const exclude = (this._shop.preview ?? []).map((r) => r.text).filter((t) => this._shop.skip.has(t));
     if (this._shopAll() === "false") return this._flash("Nessun alimento selezionato");
+    let qty;
+    try {
+      qty = shopQty(this._shop.preview, this._shop.qty, this._shop.skip);
+    } catch (err) {
+      return this._flash(err.message);
+    }
     return this._run(async () => {
-      await this._hass.callWS({ ...this._shopMsg(), add: true, exclude });
+      await this._hass.callWS({ ...this._shopMsg(), add: true, exclude, qty });
+      this._shop.qty.clear(); // added: next time the fields start from the computed quantities
       this._view = "list";
       this._listWatch();
     }, "Aggiunti alla lista della spesa");
@@ -1147,6 +1223,7 @@ class SharedDietPanel extends HTMLElement {
       case "alts": this._showAlts = !this._showAlts; return this._render();
       case "catdel": return this._deleteCategory(d.cid);
       case "catadd": return this._addCategory();
+      case "ladd": return this._addListItem();
       case "litem": return this._toggleItem(d.uid);
       case "lview":
         this._todoList.view = d.v;
@@ -1230,9 +1307,12 @@ class SharedDietPanel extends HTMLElement {
   _onInput(e) {
     const el = e.target;
     if (this._busy || !["INPUT", "TEXTAREA"].includes(el.tagName)) return;
-    if (["pfield", "meal", "item", "rfield", "ring", "rqty"].includes(el.dataset.ch) && el.type !== "checkbox") this._onChange(e);
+    if (["pfield", "meal", "item", "rfield", "ring", "rqty", "sqty"].includes(el.dataset.ch) && el.type !== "checkbox") this._onChange(e);
     if (el.classList.contains("food")) this._suggest(el);
     if (el.id === "newcat") this._shop.newCat = el.value;
+    if (el.id === "newitem") this._todoList.newItem = el.value;
+    if (el.id === "newqty") this._todoList.newQty = el.value;
+    if (el.id === "newunit") this._todoList.newUnit = el.value;
   }
 
   _onChange(e) {
@@ -1259,6 +1339,12 @@ class SharedDietPanel extends HTMLElement {
       }
       case "litem": return this._toggleItem(d.uid);
       case "scat": return this._setFoodCategory(Number(d.i), el.value);
+      case "sqty": {
+        // Kept as typed (by row text, like skip) so a re-render shows it; checked when adding. No re-render while typing.
+        const r = this._shop.preview?.[Number(d.i)];
+        if (r) this._shop.qty.set(r.text, el.validity?.badInput ? "?" : el.value); // unparsable: an error on add, not ""
+        return;
+      }
       case "catname": return this._renameCategory(d.cid, el);
       case "sprof":
         if (el.checked) this._shop.off.delete(d.id);
@@ -1573,7 +1659,9 @@ class SharedDietPanel extends HTMLElement {
       const group = (rows ?? []).map((r, i) => [r, i]).filter(([r]) => (order.includes(r.category) ? r.category : "altro") === cid);
       return group.length ? `<h3>${esc(names[cid])}</h3>${group.map(([r, i]) =>
         `<div class="check shoprow"><label class="check"><input type="checkbox" role="switch" class="switch" data-ch="sitem" data-i="${i}"${
-          this._shop.skip.has(r.text) ? "" : " checked"}> ${esc(r.text)}</label>
+          this._shop.skip.has(r.text) ? "" : " checked"}> ${esc(r.qty === null ? r.text : r.food)}</label>
+          ${r.qty === null ? "" : `<span class="sqty"><input type="number" min="0" max="${MAX_SHOP_QTY}" step="any" inputmode="decimal" data-ch="sqty" data-i="${i}"
+            value="${esc(this._shop.qty.get(r.text) ?? r.qty)}" aria-label="Quantità di ${esc(r.food)}"><span class="unit">${esc(r.unit)}</span></span>`}
           <select data-ch="scat" data-i="${i}" aria-label="Categoria di ${esc(r.food)}">${catOpts(this._manualCat(r))}</select></div>`).join("")}` : "";
     }).join("");
     const items = rows === null ? `<p class="muted">Caricamento…</p>`
@@ -1615,8 +1703,8 @@ class SharedDietPanel extends HTMLElement {
     const check = (i) => `<label class="check"><input type="checkbox" data-ch="litem" data-uid="${esc(i.uid)}"${
       i.status === "completed" ? " checked" : ""}> ${esc(i.summary)}</label>`;
     const card = (i) => i.status === "completed"
-      ? `<button class="lcard done" data-act="litem" data-uid="${esc(i.uid)}" aria-label="Riapri ${esc(i.summary)}">${esc(i.summary)}</button>`
-      : `<button class="lcard" data-act="litem" data-uid="${esc(i.uid)}" aria-label="Completa ${esc(i.summary)}">${esc(i.summary)}</button>`;
+      ? `<button class="lcard done" data-act="litem" data-uid="${esc(i.uid)}" aria-label="Riapri ${esc(i.summary)}">${cardText(i.summary)}</button>`
+      : `<button class="lcard" data-act="litem" data-uid="${esc(i.uid)}" aria-label="Completa ${esc(i.summary)}">${cardText(i.summary)}</button>`;
     // Kept open across re-renders (a tick inside it re-renders the tab) once the user opened it.
     const doneOpen = this.shadowRoot.getElementById("done")?.open;
     const listHtml = (list) => (view === "card" ? `<div class="lcards">${list.map(card).join("")}</div>` : list.map(check).join(""));
@@ -1632,8 +1720,16 @@ class SharedDietPanel extends HTMLElement {
       : !items.length ? `<p class="muted">Lista vuota.</p>`
       : (groups || `<p class="muted">Tutto preso.</p>`) +
         (done.length ? `<details class="lgroup" id="done"${doneOpen ? " open" : ""}><summary>Completati (${done.length})</summary>${listHtml(done)}</details>` : "");
+    const add = !this._todoList.entity ? "" : `<div class="row"><input class="grow" id="newitem" maxlength="255"
+        placeholder="Articolo fuori dieta (es. Detersivo)" aria-label="Nuovo articolo" value="${esc(this._todoList.newItem ?? "")}">
+        <input id="newqty" class="nqty" type="number" min="0" max="${MAX_SHOP_QTY}" step="any" inputmode="decimal" placeholder="Qtà"
+          aria-label="Quantità" value="${esc(this._todoList.newQty ?? "")}">
+        <input id="newunit" class="nunit" list="units" maxlength="10" placeholder="Unità" aria-label="Unità di misura"
+          value="${esc(this._todoList.newUnit ?? "")}">
+        <datalist id="units">${["g", "kg", "ml", "l", "pz", "conf"].map((u) => `<option value="${u}">`).join("")}</datalist>
+        <button data-act="ladd">Aggiungi</button></div>`;
     return `<div class="page-head"><h2>Lista</h2><div class="chips">${viewBtn("check", "Checkbox")}${viewBtn("card", "Card")}</div></div>
-      ${body}`;
+      ${add}${body}`;
   }
 
   // One foldable card per recipe, like the Settimana meals; the name is always editable. Any number of recipes can be
