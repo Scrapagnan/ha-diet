@@ -763,7 +763,9 @@ class SharedDietPanel extends HTMLElement {
         try {
           const res = await this._hass.callWS({ type: "shared_diet/save_profile", profile });
           this._load(res.profile);
-          return note;
+          // A profile disabled meanwhile keeps its meals on the server: say so instead of a plain "Salvato".
+          const dropped = res.profile.disabled && ["week", "exceptions", "choices"].some((k) => !same(profile[k], res.profile[k]));
+          return dropped ? "Profilo disabilitato: modifiche a settimana e scelte non salvate" : note;
         } catch (err) {
           if (err?.code !== "conflict") throw err;
           const theirs = this._profiles[id];
