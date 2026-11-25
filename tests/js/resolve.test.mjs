@@ -604,7 +604,7 @@ const RECIPES = {
   assert.deepEqual(plain(sent[0]).exclude, ["Pasta - 80 g"]);
   assert.equal(sent[0].add, true);
   assert.equal(p._view, "list");
-  assert.equal(p._todoList.entity, "todo.lista_della_spesa"); // the integration's own list
+  assert.equal(p._todoList.watch.entity, "todo.lista_della_spesa"); // the integration's own list
   p._view = "shop";
   p._listWatch();
   sent.length = 0;
@@ -1092,11 +1092,11 @@ const RECIPES = {
   let flashed = "";
   p._flash = (m) => { flashed = m; };
   await p._toggleItem("1");
-  assert.equal(p._todoList.items[0].status, "needs_action");
+  assert.equal(p._todoList.watch.items[0].status, "needs_action");
   assert.equal(flashed, "Non autorizzato");
   // Only unseen texts are classified; leaving the tab ends the subscription.
   const asked = ws.filter((m) => m.type === "shared_diet/categorize").length;
-  await push({ items: [...p._todoList.items, { uid: "5", summary: "Mele - 2 pz", status: "needs_action" }] });
+  await push({ items: [...p._todoList.watch.items, { uid: "5", summary: "Mele - 2 pz", status: "needs_action" }] });
   assert.equal(ws.filter((m) => m.type === "shared_diet/categorize").length, asked);
   p._view = "today";
   p._listWatch();

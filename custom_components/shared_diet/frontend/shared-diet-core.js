@@ -225,8 +225,160 @@ function subscribeDiet(hass, cb) {
   };
 }
 
+// ---- Lista: the family shopping list (todo entity), shared by the panel's Lista tab and the card's `list` view. ----
+
+const MAX_SHOP_QTY = 100000; // as the server's cap on an edited shopping quantity
+// Per-user preferences, kept by HA's frontend user data (server side, follows the user on every device).
+const PREFS_KEY = "shared_diet";
+const LIST_VIEWS = ["check", "card"];
+
+// Card text of a list item: the food, then its quantity on a smaller line ("Pollo - 1,05 kg", "Sale (q.b.)").
+// Same split as the server's food_of; items typed by hand stay whole.
+const splitQty = (s) => s.match(/^(.+?) - (\d[\d.,e+-]*(?: .*)?)$/) ?? s.match(/^(.+) \(([^()]*)\)$/);
+const cardText = (s) => { const m = splitQty(s); return m ? `${esc(m[1])}<span class="lqty">${esc(m[2])}</span>` : esc(s); };
+
+// Text of an item typed by hand with a quantity, as the server writes diet rows: "Latte - 1,5 l", over 1000 g in kg.
+const shopText = (food, qty, unit) => {
+  if (unit.toLowerCase() === "g" && qty > 1000) [qty, unit] = [qty / 1000, "kg"];
+  return `${food} - ${String(+qty.toPrecision(6)).replace(".", ",")}${unit ? ` ${unit}` : ""}`;
+};
+
+// The todo text of an item typed by hand (trimmed fields; badInput: the quantity field could not be parsed).
+// Throws an Error with the message to show.
+function newItemText(name, rawQty, unit, badInput = false) {
+  if (!name) throw new Error("Scrivi l'articolo da aggiungere");
+  const qty = Number(rawQty);
+  if (badInput || (rawQty && !(qty > 0 && qty <= MAX_SHOP_QTY))) throw new Error("Quantità non valida");
+  if (unit && !rawQty) throw new Error("Indica la quantità per l'unità");
+  return rawQty ? shopText(name, qty, unit) : name;
+}
+
+// The family shopping list: the integration's own todo entity (found by platform, in case it was renamed).
+const todoEntity = (hass) => Object.values(hass.entities ?? {})
+  .find((e) => e.platform === "shared_diet" && e.entity_id.startsWith("todo."))?.entity_id ?? "todo.lista_della_spesa";
+
+// A user's category order: the saved one on existing categories, then the rest in list order (as the server does).
+function catOrder(categories, saved) {
+  const ids = categories.map((c) => c.id);
+  const order = [...new Set(saved)].filter((id) => ids.includes(id));
+  return [...order, ...ids.filter((id) => !order.includes(id))];
+}
+
+// This user's Checkbox/Card choice ("check" by default), and saving it.
+const loadListView = (hass) => hass.callWS({ type: "frontend/get_user_data", key: PREFS_KEY })
+  .then(({ value }) => (LIST_VIEWS.includes(value?.listView) ? value.listView : "check"), () => "check");
+const saveListView = (hass, view) => hass.callWS({ type: "frontend/set_user_data", key: PREFS_KEY, value: { listView: view } });
+
+// Live items of a todo entity, each with the category of its text (asked to the server once per new text, items typed
+// by hand included). onChange() after each update; onError(message) when reading, classifying or ticking fails.
+// Returns { entity, items (null until the first push), cats (text -> category id), categorize(all), toggle(uid), add(text), close() }.
+function watchTodo(hass, entity, onChange, onError) {
+  const w = { entity, items: null, cats: new Map(), closed: false };
+  // `all` asks again for every text, keeping the current groups until the answer replaces them.
+  w.categorize = async (all = false) => {
+    const texts = [...new Set((w.items ?? []).map((i) => i.summary))].filter((t) => all || !w.cats.has(t)).slice(0, 1000);
+    if (texts.length) {
+      try {
+        const res = await hass.callWS({ type: "shared_diet/categorize", texts });
+        if (w.closed) return;
+        const into = all ? (w.cats = new Map()) : w.cats;
+        texts.forEach((t, i) => into.set(t, res.categories[i]));
+      } catch (err) {
+        if (!w.closed) onError(err?.message || "Impossibile classificare la lista");
+      }
+    }
+    if (!w.closed) onChange();
+  };
+  const sub = hass.connection.subscribeMessage((ev) => {
+    if (w.closed) return;
+    w.items = ev.items ?? [];
+    return w.categorize();
+  }, { type: "todo/item/subscribe", entity_id: entity }).catch((err) => {
+    if (!w.closed) {
+      w.items = [];
+      onError(err?.message || "Impossibile leggere la lista");
+      onChange();
+    }
+    return () => {};
+  });
+  // Ticks or unticks an item: shown at once, confirmed by the subscription, back if refused.
+  w.toggle = async (uid) => {
+    const item = w.items?.find((i) => i.uid === uid);
+    if (!item) return;
+    const before = item.status;
+    item.status = before === "completed" ? "needs_action" : "completed";
+    onChange();
+    try {
+      await hass.callService("todo", "update_item", { item: uid, status: item.status }, { entity_id: entity });
+    } catch (err) {
+      item.status = before;
+      onError(err?.message || "Operazione non riuscita");
+      onChange();
+    }
+  };
+  w.add = (text) => hass.callService("todo", "add_item", { item: text }, { entity_id: entity });
+  w.close = () => {
+    w.closed = true;
+    sub.then((unsub) => unsub?.(), () => {});
+  };
+  return w;
+}
+
+// The list grouped by category in `order`, a clear gap between groups; ticked items go to the bottom, folded under
+// Completati (open when doneOpen). view: "check" (checkboxes, data-ch="litem") or "card" (buttons, data-act="litem").
+function todoListHtml({ items, cats, categories, order, view, doneOpen = false }) {
+  if (items === null) return `<p class="muted">Caricamento…</p>`;
+  if (!items.length) return `<p class="muted">Lista vuota.</p>`;
+  const names = Object.fromEntries(categories.map((c) => [c.id, c.name]));
+  const catOf = (i) => { const c = cats.get(i.summary); return order.includes(c) ? c : "altro"; };
+  const open = items.filter((i) => i.status !== "completed");
+  const done = items.filter((i) => i.status === "completed");
+  const check = (i) => `<label class="check"><input type="checkbox" data-ch="litem" data-uid="${esc(i.uid)}"${
+    i.status === "completed" ? " checked" : ""}> ${esc(i.summary)}</label>`;
+  const card = (i) => i.status === "completed"
+    ? `<button class="lcard done" data-act="litem" data-uid="${esc(i.uid)}" aria-label="Riapri ${esc(i.summary)}">${cardText(i.summary)}</button>`
+    : `<button class="lcard" data-act="litem" data-uid="${esc(i.uid)}" aria-label="Completa ${esc(i.summary)}">${cardText(i.summary)}</button>`;
+  const listHtml = (list) => (view === "card" ? `<div class="lcards">${list.map(card).join("")}</div>` : list.map(check).join(""));
+  const groups = order.map((cid) => {
+    const group = open.filter((i) => catOf(i) === cid);
+    if (!group.length) return "";
+    return `<section class="lgroup"><h3>${esc(names[cid])} <span class="muted">${group.length}</span></h3>${listHtml(group)}</section>`;
+  }).join("");
+  return (groups || `<p class="muted">Tutto preso.</p>`) +
+    (done.length ? `<details class="lgroup" id="done"${doneOpen ? " open" : ""}><summary>Completati (${done.length})</summary>${listHtml(done)}</details>` : "");
+}
+
+// Checkbox/Card switch (data-act="lview" data-v).
+const listViewChips = (view) => `<div class="chips">${[["check", "Checkbox"], ["card", "Card"]].map(([v, l]) =>
+  `<button class="chip${view === v ? " on" : ""}" data-act="lview" data-v="${v}" aria-pressed="${view === v}">${l}</button>`).join("")}</div>`;
+
+// The row to add an item by hand: name, optional quantity and unit (#newitem, #newqty, #newunit, data-act="ladd").
+const todoAddHtml = ({ newItem = "", newQty = "", newUnit = "" } = {}) => `<div class="row"><input class="grow" id="newitem" maxlength="255"
+    placeholder="Articolo fuori dieta (es. Detersivo)" aria-label="Nuovo articolo" value="${esc(newItem)}">
+    <input id="newqty" class="nqty" type="number" min="0" max="${MAX_SHOP_QTY}" step="any" inputmode="decimal" placeholder="Qtà"
+      aria-label="Quantità" value="${esc(newQty)}">
+    <input id="newunit" class="nunit" list="units" maxlength="10" placeholder="Unità" aria-label="Unità di misura"
+      value="${esc(newUnit)}">
+    <datalist id="units">${["g", "kg", "ml", "l", "pz", "conf"].map((u) => `<option value="${u}">`).join("")}</datalist>
+    <button data-act="ladd">Aggiungi</button></div>`;
+
+const LIST_CSS = `
+.nqty { width: 80px; }
+.nunit { width: 72px; }
+.lgroup { margin-top: 24px; padding-top: 12px; border-top: 2px solid var(--divider-color, #e0e0e0); }
+.lgroup h3 { margin: 0 0 8px; }
+.lcards { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+.lcard { min-height: 64px; text-align: left; white-space: normal; border-radius: 12px;
+  background: var(--card-background-color, #fff); box-shadow: 0 1px 3px rgba(0, 0, 0, .2); }
+.lcard .lqty { display: block; font-size: 0.85em; opacity: 0.75; margin-top: 2px; }
+.lcard.done { opacity: 0.55; text-decoration: line-through; box-shadow: none; }
+details.lgroup .lcards { margin-top: 8px; }
+`;
+
 export {
   esc, pad, iso, parseIso, addDays, weekday, fmtDay, fmtItem, foldText, zeroChoice, sharesWith, byTime, nearestMeal,
   effectiveDay, own, choiceFor, recipeOf, expandItem, itemLabel, sumItems, resolveMeal,
   itemsHtml, mealGroups, nextGroup, todayPlan, groupsHtml, subscribeDiet,
+  MAX_SHOP_QTY, PREFS_KEY, splitQty, cardText, shopText, newItemText, todoEntity, catOrder, loadListView, saveListView,
+  watchTodo, todoListHtml, listViewChips, todoAddHtml, LIST_CSS,
 };

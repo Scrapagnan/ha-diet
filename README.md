@@ -97,14 +97,15 @@ La card è disponibile in **Aggiungi card** (cerca "Dieta") subito dopo installa
 
 ```yaml
 type: custom:shared-diet-card
-view: next        # next (prossimo pasto, predefinito) oppure today (tutti i pasti di oggi)
-profiles: [id1]   # facoltativo: solo questi profili (id in profile_id dei sensori); predefinito tutti
+view: next        # next (prossimo pasto, predefinito), today (tutti i pasti di oggi) oppure list (lista della spesa)
+profiles: [id1]   # facoltativo, solo next/today: solo questi profili (id in profile_id dei sensori); predefinito tutti
 ```
 
 - `next`: il prossimo pasto con orario, il totale (se più persone condividono un alimento) e la porzione di ognuno.
 - `today`: i pasti del giorno come nella scheda **Oggi**, senza alternative, con il prossimo evidenziato.
+- `list`: la lista della spesa di famiglia come nella scheda **Lista**: articoli raggruppati per reparto nell'ordine di chi la guarda, completati in fondo, vista Checkbox o Card (stessa preferenza del pannello), spunta per completare e riga in cima per aggiungere articoli a mano con quantità e unità facoltative.
 
-Si aggiorna da sola a ogni modifica e ogni minuto. È di sola lettura: un tocco apre il pannello **Dieta**. La lista della spesa non è nella card.
+Si aggiorna da sola a ogni modifica e ogni minuto. Le viste `next` e `today` sono di sola lettura: un tocco apre il pannello **Dieta**. Nella vista `list` l'ordine dei reparti si cambia dalla scheda **Categorie** del pannello (la card lo rilegge al caricamento della pagina).
 
 ### Widget sulla home del telefono (Companion app)
 

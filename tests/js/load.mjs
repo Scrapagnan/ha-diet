@@ -7,6 +7,13 @@ const read = (name) => readFileSync(new URL(`../../custom_components/shared_diet
 
 export const coreSource = () => read("shared-diet-core.js").replace(/^export \{[\s\S]*?\};$/m, "");
 
+// Same for the dashboard card.
+export function loadCard(ctx, names) {
+  const card = read("shared-diet-card.js").replace(/^import \{[\s\S]*?\} from "\.\/shared-diet-core\.js";$/m, "");
+  vm.createContext(ctx);
+  return vm.runInContext(`${coreSource()}\n${card}\n;({ ${names.join(", ")} });`, ctx);
+}
+
 export function loadPanel(ctx, names) {
   const panel = read("shared-diet-panel.js").replace(/^import \{[\s\S]*?\} from "\.\/shared-diet-core\.js";$/m, "");
   vm.createContext(ctx);

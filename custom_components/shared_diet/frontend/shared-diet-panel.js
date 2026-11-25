@@ -3,6 +3,8 @@
 import {
   esc, iso, parseIso, addDays, weekday, fmtDay, fmtItem, foldText, zeroChoice, byTime, own, recipeOf, itemLabel, resolveMeal,
   mealGroups, nextGroup, todayPlan, groupsHtml, subscribeDiet,
+  MAX_SHOP_QTY, newItemText, todoEntity, catOrder, loadListView, saveListView, watchTodo, todoListHtml, listViewChips,
+  todoAddHtml, LIST_CSS,
 } from "./shared-diet-core.js";
 
 const TABS = [
@@ -13,8 +15,6 @@ const DAYS_SHORT = ["Lun", "Mar", "Mer", "Gio", "Ven", "Sab", "Dom"];
 // Material Design "delete" icon (same as HA's mdi:delete), drawn in the text color.
 const TRASH = `<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor"
   d="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z"/></svg>`;
-// Per-user panel preferences, kept by HA's frontend user data (server side, follows the user on every device).
-const PREFS_KEY = "shared_diet";
 const CADENCES = [["1w", "Settimanale"], ["2w", "Ogni 2 settimane"], ["1m", "Mensile"]];
 
 const CSS = `
@@ -101,17 +101,7 @@ details p { white-space: pre-line; margin: 6px 0; }
 .sqty { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
 .sqty input { width: 80px; }
 .sqty .unit { min-width: 2.5em; }
-.nqty { width: 80px; }
-.nunit { width: 72px; }
-.lgroup { margin-top: 24px; padding-top: 12px; border-top: 2px solid var(--divider-color, #e0e0e0); }
-.lgroup h3 { margin: 0 0 8px; }
 .page-head .chips .chip { flex: 0 0 auto; padding: 6px 12px; }
-.lcards { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
-.lcard { min-height: 64px; text-align: left; white-space: normal; border-radius: 12px;
-  background: var(--card-background-color, #fff); box-shadow: 0 1px 3px rgba(0, 0, 0, .2); }
-.lcard .lqty { display: block; font-size: 0.85em; opacity: 0.75; margin-top: 2px; }
-.lcard.done { opacity: 0.55; text-decoration: line-through; box-shadow: none; }
-details.lgroup .lcards { margin-top: 8px; }
 .or { font-size: 12px; font-weight: 600; text-align: center; color: var(--secondary-text-color, #727272); }
 .chips { display: flex; gap: 4px; }
 .remind button.chip { flex: 0 0 auto; padding: 6px 10px; }
@@ -140,26 +130,14 @@ ul { padding-left: 20px; margin: 6px 0; }
 ul.alts { list-style: none; padding-left: 0; font-size: 14px; }
 fieldset { border: 1px solid var(--divider-color, #e0e0e0); border-radius: 8px; }
 fieldset.ro { border: 0; padding: 0; margin: 0; min-width: 0; }
-`;
+${LIST_CSS}`;
 
 const clone = (o) => JSON.parse(JSON.stringify(o));
 const uid = () =>
   (crypto.randomUUID ? crypto.randomUUID() : [...crypto.getRandomValues(new Uint8Array(16))].map((b) => b.toString(16).padStart(2, "0")).join("")).replaceAll("-", "");
-// Card text of a list item: the food, then its quantity on a smaller line ("Pollo - 1,05 kg", "Sale (q.b.)").
-// Same split as the server's food_of; items typed by hand stay whole.
-const splitQty = (s) => s.match(/^(.+?) - (\d[\d.,e+-]*(?: .*)?)$/) ?? s.match(/^(.+) \(([^()]*)\)$/);
-const cardText = (s) => { const m = splitQty(s); return m ? `${esc(m[1])}<span class="lqty">${esc(m[2])}</span>` : esc(s); };
 
 // Text fields a push must not re-render under the user's typing (see _onData and focusout).
 const TYPING = '[data-ch="catname"], #newcat, #newitem, #newqty, #newunit';
-
-const MAX_SHOP_QTY = 100000; // as the server's cap on an edited shopping quantity
-
-// Text of an item typed by hand with a quantity, as the server writes diet rows: "Latte - 1,5 l", over 1000 g in kg.
-const shopText = (food, qty, unit) => {
-  if (unit.toLowerCase() === "g" && qty > 1000) [qty, unit] = [qty / 1000, "kg"];
-  return `${food} - ${String(+qty.toPrecision(6)).replace(".", ",")}${unit ? ` ${unit}` : ""}`;
-};
 
 // Edited quantities to send with "Aggiungi alla lista": {row text: qty} for selected rows with a quantity whose field
 // was changed. An empty field keeps the computed quantity; anything else must be a number > 0.
@@ -340,8 +318,8 @@ class SharedDietPanel extends HTMLElement {
     let cadence = "1w";
     try { cadence = localStorage.getItem("shared_diet.cadence") ?? "1w"; } catch { /* storage blocked */ }
     this._shop = { cadence: CADENCES.some(([k]) => k === cadence) ? cadence : "1w", off: new Set(), preview: null, skip: new Set(), qty: new Map(), seq: 0, order: [] };
-    // Lista tab: live items of the family todo entity, each with its category (by item text).
-    this._todoList = { view: "check", entity: "", items: null, cats: new Map(), unsub: null };
+    // Lista tab: the Checkbox/Card choice, the add-item fields, and the watch on the family todo entity (watchTodo).
+    this._todoList = { view: "check", watch: null };
     this.shadowRoot.addEventListener("click", (e) => this._onClick(e));
     this.shadowRoot.addEventListener("change", (e) => this._onChange(e));
     this.shadowRoot.addEventListener("input", (e) => this._onInput(e));
@@ -520,7 +498,7 @@ class SharedDietPanel extends HTMLElement {
       return;
     }
     if (this._view === "shop") this._loadShop();
-    if (this._view === "list") this._listCats(true); // categories or overrides may have changed
+    if (this._view === "list") this._todoList.watch?.categorize(true); // categories or overrides may have changed
     this._render();
   }
 
@@ -772,43 +750,28 @@ class SharedDietPanel extends HTMLElement {
     }, "Ricetta eliminata");
   }
 
-  // The family shopping list: the integration's own todo entity (found by platform, in case it was renamed).
-  _todo() {
-    const own = Object.values(this._hass.entities ?? {}).find((e) => e.platform === "shared_diet" && e.entity_id.startsWith("todo."));
-    return own?.entity_id ?? "todo.lista_della_spesa";
-  }
-
   // Follows the family todo entity while the Lista tab is shown; `stop` ends it (panel removed).
   _listWatch(stop = false) {
-    const entity = !stop && this._view === "list" ? this._todo() : "";
-    if (entity === this._todoList.entity) return;
-    this._todoList.unsub?.then((unsub) => unsub?.(), () => {});
-    Object.assign(this._todoList, { entity, items: null, cats: new Map(), unsub: null });
+    const entity = !stop && this._view === "list" ? todoEntity(this._hass) : "";
+    if (entity === (this._todoList.watch?.entity ?? "")) return;
+    this._todoList.watch?.close();
+    this._todoList.watch = null;
     if (!entity) return;
     this._loadOrder();
-    this._todoList.unsub = this._hass.connection
-      .subscribeMessage((ev) => this._onListItems(entity, ev.items), { type: "todo/item/subscribe", entity_id: entity })
-      .catch((err) => {
-        if (this._todoList.entity === entity) {
-          this._todoList.items = [];
-          this._flash(err?.message || "Impossibile leggere la lista");
-          this._render();
-        }
-        return () => {};
-      });
+    this._todoList.watch = watchTodo(this._hass, entity, () => {
+      if (this._view !== "list" || this._busy) return;
+      if (this.shadowRoot.activeElement?.matches?.(TYPING)) this._shop.stale = true; // rendered on focusout, not under typing
+      else this._render();
+    }, (m) => this._flash(m));
   }
 
   async _loadPrefs() {
-    try {
-      const { value } = await this._hass.callWS({ type: "frontend/get_user_data", key: PREFS_KEY });
-      if (value?.listView === "card" || value?.listView === "check") this._todoList.view = value.listView;
-    } catch { /* defaults */ }
+    this._todoList.view = await loadListView(this._hass);
     if (this._view === "list" && !this._busy) this._render();
   }
 
   _savePrefs() {
-    this._hass.callWS({ type: "frontend/set_user_data", key: PREFS_KEY, value: { listView: this._todoList.view } })
-      .catch((err) => this._flash(err?.message || "Preferenza non salvata"));
+    saveListView(this._hass, this._todoList.view).catch((err) => this._flash(err?.message || "Preferenza non salvata"));
   }
 
   // This user's saved category order, for the tabs that need it without a shopping preview.
@@ -821,65 +784,28 @@ class SharedDietPanel extends HTMLElement {
     }, () => {});
   }
 
-  _onListItems(entity, items) {
-    if (entity !== this._todoList.entity) return;
-    this._todoList.items = items ?? [];
-    return this._listCats();
-  }
-
-  // Asks the server the category of item texts not seen yet (items typed by hand included); `all` asks again for every
-  // text, keeping the current groups on screen until the answer replaces them.
-  async _listCats(all = false) {
-    const { entity, cats } = this._todoList;
-    const texts = [...new Set((this._todoList.items ?? []).map((i) => i.summary))].filter((t) => all || !cats.has(t)).slice(0, 1000);
-    if (texts.length) {
-      try {
-        const res = await this._hass.callWS({ type: "shared_diet/categorize", texts });
-        if (entity !== this._todoList.entity) return; // another list since
-        const into = all ? (this._todoList.cats = new Map()) : cats;
-        texts.forEach((t, i) => into.set(t, res.categories[i]));
-      } catch (err) {
-        this._flash(err?.message || "Impossibile classificare la lista");
-      }
-    }
-    if (entity !== this._todoList.entity || this._view !== "list" || this._busy) return;
-    if (this.shadowRoot.activeElement?.matches?.(TYPING)) this._shop.stale = true; // rendered on focusout, not under typing
-    else this._render();
-  }
-
   // An item typed by hand, outside the diet: added to the family list, the field kept focused for the next one.
   _addListItem() {
     const val = (id) => this.shadowRoot.getElementById(id)?.value.trim() ?? "";
     const [name, rawQty, unit] = [val("newitem"), val("newqty"), val("newunit")];
-    if (!name) return this._flash("Scrivi l'articolo da aggiungere");
-    const qty = Number(rawQty);
-    const badQty = this.shadowRoot.getElementById("newqty")?.validity?.badInput || (rawQty && !(qty > 0 && qty <= MAX_SHOP_QTY));
-    if (badQty) return this._flash("Quantità non valida");
-    if (unit && !rawQty) return this._flash("Indica la quantità per l'unità");
+    let text;
+    try {
+      text = newItemText(name, rawQty, unit, this.shadowRoot.getElementById("newqty")?.validity?.badInput);
+    } catch (err) {
+      return this._flash(err.message);
+    }
     // Survive the re-renders; cleared only once added.
     Object.assign(this._todoList, { newItem: name, newQty: rawQty, newUnit: unit });
     this._focus = "#newitem";
-    const text = rawQty ? shopText(name, qty, unit) : name;
     return this._run(async () => {
-      await this._hass.callService("todo", "add_item", { item: text }, { entity_id: this._todoList.entity });
+      await this._todoList.watch.add(text);
       Object.assign(this._todoList, { newItem: "", newQty: "", newUnit: "" });
     }, "Articolo aggiunto");
   }
 
   // Ticks or unticks a todo item; shown at once, confirmed by the subscription.
-  async _toggleItem(uid) {
-    const item = this._todoList.items?.find((i) => i.uid === uid);
-    if (!item) return;
-    const before = item.status;
-    item.status = before === "completed" ? "needs_action" : "completed";
-    this._render();
-    try {
-      await this._hass.callService("todo", "update_item", { item: uid, status: item.status }, { entity_id: this._todoList.entity });
-    } catch (err) {
-      item.status = before;
-      this._flash(err?.message || "Operazione non riuscita");
-      this._render();
-    }
+  _toggleItem(uid) {
+    return this._todoList.watch?.toggle(uid);
   }
 
   _shopMsg() {
@@ -946,9 +872,7 @@ class SharedDietPanel extends HTMLElement {
 
   // This user's category order: the saved one on existing categories, then the rest in list order (as the server does).
   _catOrder() {
-    const ids = this._categories.map((c) => c.id);
-    const order = [...new Set(this._shop.order)].filter((id) => ids.includes(id));
-    return [...order, ...ids.filter((id) => !order.includes(id))];
+    return catOrder(this._categories, this._shop.order);
   }
 
   // Keyboard alternative to dragging: arrows on a focused grip.
@@ -1545,42 +1469,14 @@ class SharedDietPanel extends HTMLElement {
 
   // The todo list grouped by category in this user's order, a clear gap between groups; ticked items go to the bottom.
   _vList() {
-    const { items, view } = this._todoList;
-    const order = this._catOrder();
-    const names = Object.fromEntries(this._categories.map((c) => [c.id, c.name]));
-    const catOf = (i) => { const c = this._todoList.cats.get(i.summary); return order.includes(c) ? c : "altro"; };
-    const open = (items ?? []).filter((i) => i.status !== "completed");
-    const done = (items ?? []).filter((i) => i.status === "completed");
-    const check = (i) => `<label class="check"><input type="checkbox" data-ch="litem" data-uid="${esc(i.uid)}"${
-      i.status === "completed" ? " checked" : ""}> ${esc(i.summary)}</label>`;
-    const card = (i) => i.status === "completed"
-      ? `<button class="lcard done" data-act="litem" data-uid="${esc(i.uid)}" aria-label="Riapri ${esc(i.summary)}">${cardText(i.summary)}</button>`
-      : `<button class="lcard" data-act="litem" data-uid="${esc(i.uid)}" aria-label="Completa ${esc(i.summary)}">${cardText(i.summary)}</button>`;
-    // Kept open across re-renders (a tick inside it re-renders the tab) once the user opened it.
-    const doneOpen = this.shadowRoot.getElementById("done")?.open;
-    const listHtml = (list) => (view === "card" ? `<div class="lcards">${list.map(card).join("")}</div>` : list.map(check).join(""));
-    const groups = order.map((cid) => {
-      const group = open.filter((i) => catOf(i) === cid);
-      if (!group.length) return "";
-      const body = listHtml(group);
-      return `<section class="lgroup"><h3>${esc(names[cid])} <span class="muted">${group.length}</span></h3>${body}</section>`;
-    }).join("");
-    const viewBtn = (v, l) => `<button class="chip${view === v ? " on" : ""}" data-act="lview" data-v="${v}" aria-pressed="${view === v}">${l}</button>`;
-    const body = !this._todoList.entity ? ""
-      : items === null ? `<p class="muted">Caricamento…</p>`
-      : !items.length ? `<p class="muted">Lista vuota.</p>`
-      : (groups || `<p class="muted">Tutto preso.</p>`) +
-        (done.length ? `<details class="lgroup" id="done"${doneOpen ? " open" : ""}><summary>Completati (${done.length})</summary>${listHtml(done)}</details>` : "");
-    const add = !this._todoList.entity ? "" : `<div class="row"><input class="grow" id="newitem" maxlength="255"
-        placeholder="Articolo fuori dieta (es. Detersivo)" aria-label="Nuovo articolo" value="${esc(this._todoList.newItem ?? "")}">
-        <input id="newqty" class="nqty" type="number" min="0" max="${MAX_SHOP_QTY}" step="any" inputmode="decimal" placeholder="Qtà"
-          aria-label="Quantità" value="${esc(this._todoList.newQty ?? "")}">
-        <input id="newunit" class="nunit" list="units" maxlength="10" placeholder="Unità" aria-label="Unità di misura"
-          value="${esc(this._todoList.newUnit ?? "")}">
-        <datalist id="units">${["g", "kg", "ml", "l", "pz", "conf"].map((u) => `<option value="${u}">`).join("")}</datalist>
-        <button data-act="ladd">Aggiungi</button></div>`;
-    return `<div class="page-head"><h2>Lista</h2><div class="chips">${viewBtn("check", "Checkbox")}${viewBtn("card", "Card")}</div></div>
-      ${add}${body}`;
+    const { watch, view } = this._todoList;
+    const body = !watch ? "" : todoListHtml({
+      items: watch.items, cats: watch.cats, categories: this._categories, order: this._catOrder(), view,
+      // Kept open across re-renders (a tick inside it re-renders the tab) once the user opened it.
+      doneOpen: this.shadowRoot.getElementById("done")?.open,
+    });
+    return `<div class="page-head"><h2>Lista</h2>${listViewChips(view)}</div>
+      ${watch ? todoAddHtml(this._todoList) : ""}${body}`;
   }
 
   // One foldable card per recipe, like the Settimana meals; the name is always editable. Any number of recipes can be
