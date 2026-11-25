@@ -7,7 +7,13 @@ import { fileURLToPath } from "node:url";
 const panel = fileURLToPath(new URL("../../custom_components/shared_diet/frontend/shared-diet-panel.js", import.meta.url));
 const ctx = {
   // The panel constructor calls attachShadow(); a plain stub is enough for rendering helpers.
-  HTMLElement: class { attachShadow() { this.shadowRoot = { addEventListener() {}, getElementById: () => null, querySelectorAll: () => [] }; } },
+  // Tests run as an admin (every profile editable) unless they set hass.user themselves.
+  HTMLElement: class {
+    #hass = { user: { id: "admin", is_admin: true } };
+    get _hass() { return this.#hass; }
+    set _hass(h) { if (h) h.user ??= { id: "admin", is_admin: true }; this.#hass = h; }
+    attachShadow() { this.shadowRoot = { addEventListener() {}, getElementById: () => null, querySelectorAll: () => [] }; }
+  },
   customElements: { get: () => undefined, define() {} },
   crypto: globalThis.crypto, // uid() in the panel
   CustomEvent: class { constructor(type, init) { this.type = type; Object.assign(this, init); } },
@@ -892,5 +898,38 @@ const RECIPES = {
   toggle("b", true); toggle("c", true); toggle("b", true); assert.deepEqual(sw(), ["c", "b"]);
   toggle("c", false); assert.deepEqual(sw(), ["b"]);
   toggle("", true); assert.equal("shared_with" in p._draft.week[0][0], false);
+}
+
+// Per-user profiles: a non-admin edits only their own profile; the others render read-only (disabled fieldset, no Save
+// or Delete), and the editor opens on their own profile.
+{
+  const meals = { 0: [{ id: "m1", name: "Pranzo", time: "12:00", options: [[{ alts: [{ food: "Riso", qty: 80, unit: "g", note: "" }] }]] }] };
+  const mk = (id, name, user_id) => ({ id, name, user_id, person: null, reminder: { enabled: false, minutes: 15, notify: null },
+    week: { 0: [], 1: [], 2: [], 3: [], 4: [], 5: [], 6: [], ...meals }, exceptions: {}, choices: { defaults: {}, dates: {} }, recipe_qty: {}, rev: 1 });
+  const p = new SharedDietPanel();
+  p._hass = { user: { id: "u2", is_admin: false }, states: {}, services: {} };
+  p._onData({ a: mk("a", "Anna", "u1"), b: mk("b", "Bea", "u2"), c: mk("c", "Vecchio", null) }, {});
+  assert.equal(p._profileId, "b"); // own profile first
+  p._wday = 0;
+
+  p._view = "week";
+  assert.doesNotMatch(p._body(), /Sola lettura|disabled>/);
+  p._selectProfile("a");
+  const week = p._body();
+  assert.match(week, /<fieldset class="ro" disabled>[\s\S]*value="Pranzo"/);
+  assert.doesNotMatch(week, /data-act="save"|data-act="fold"/); // no Save; meals open, no fold button
+
+  p._view = "profiles";
+  const profiles = p._body();
+  assert.equal((profiles.match(/<fieldset class="ro" disabled>/g) ?? []).length, 2); // Anna and Vecchio
+  assert.equal((profiles.match(/data-act="save"/g) ?? []).length, 1); // only Bea's
+  assert.doesNotMatch(profiles, /delprofile|Crea profilo/);
+  assert.match(profiles, /Nessun utente collegato/);
+  assert.equal(p._editCard("a"), false); // edits to another card never switch the draft to it
+
+  p._hass = { user: { id: "u9", is_admin: true }, states: {}, services: {} };
+  const admin = p._body();
+  assert.doesNotMatch(admin, /class="ro"/);
+  assert.equal((admin.match(/data-act="delprofile"/g) ?? []).length, 3);
 }
 console.log("resolve.test.mjs: all assertions passed");

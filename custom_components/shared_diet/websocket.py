@@ -1,4 +1,4 @@
-"""Websocket API for shared_diet. No admin requirement: the panel is open to every HA user."""
+"""Websocket API for shared_diet. The panel is open to every HA user; a non-admin may only change their own profile."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from homeassistant.helpers import config_validation as cv
 
 from .const import DOMAIN
 from .model import fold_name, shopping_items
-from .store import MAX_PROFILES, ConflictError, DietStore, DuplicateNameError, InUseError, LimitError, UnknownRecipeError
+from .store import MAX_PROFILES, ConflictError, DietStore, DuplicateNameError, InUseError, UnknownRecipeError
 
 MAX_SPAN_DAYS = 62
 # Cardinality caps: resolving a meal costs lines x recipe ingredients, so every list needs a bound.
@@ -209,28 +209,16 @@ async def ws_subscribe(hass: HomeAssistant, connection: websocket_api.ActiveConn
 
 
 @websocket_api.websocket_command(
-    {vol.Required("type"): "shared_diet/create_profile", vol.Required("name"): NON_EMPTY}
-)
-@websocket_api.async_response
-async def ws_create_profile(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
-    store = _store(hass, connection, msg)
-    if store is None:
-        return
-    try:
-        profile = await store.async_create_profile(msg["name"])
-    except LimitError as err:
-        connection.send_error(msg["id"], "limit", f"Massimo {err.args[0]} profili")
-        return
-    connection.send_result(msg["id"], {"profile": profile})
-
-
-@websocket_api.websocket_command(
     {vol.Required("type"): "shared_diet/save_profile", vol.Required("profile"): PROFILE_SCHEMA}
 )
 @websocket_api.async_response
 async def ws_save_profile(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
     store = _store(hass, connection, msg)
     if store is None:
+        return
+    current = store.snapshot()["profiles"].get(msg["profile"]["id"])
+    if current is not None and not connection.user.is_admin and current["user_id"] != connection.user.id:
+        connection.send_error(msg["id"], websocket_api.ERR_UNAUTHORIZED, "Puoi modificare solo il tuo profilo")
         return
     try:
         profile = await store.async_save_profile(msg["profile"])
@@ -253,6 +241,7 @@ async def ws_save_profile(hass: HomeAssistant, connection: websocket_api.ActiveC
 @websocket_api.websocket_command(
     {vol.Required("type"): "shared_diet/delete_profile", vol.Required("profile_id"): str}
 )
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_delete_profile(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict) -> None:
     store = _store(hass, connection, msg)
@@ -371,7 +360,6 @@ async def ws_shopping(hass: HomeAssistant, connection: websocket_api.ActiveConne
 
 COMMANDS = (
     ws_subscribe,
-    ws_create_profile,
     ws_save_profile,
     ws_delete_profile,
     ws_create_recipe,

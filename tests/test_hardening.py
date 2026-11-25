@@ -15,8 +15,7 @@ from homeassistant.setup import async_setup_component
 
 from custom_components.shared_diet import websocket as ws
 from custom_components.shared_diet.const import DOMAIN
-from custom_components.shared_diet import store as store_mod
-from test_websocket import CLIENT_ID, MONDAY, _non_admin_client, call, client, item, meal, setup_entry  # noqa: F401
+from test_websocket import MONDAY, _non_admin_client, _user_client, call, client, item, meal, own_profile, setup_entry  # noqa: F401
 
 
 def _alts(n):
@@ -56,7 +55,7 @@ async def test_recipe_ingredients_are_capped(client):
     ],
 )
 async def test_profile_cardinality_is_capped(client, week_meals, label):
-    profile = (await call(client, "create_profile", name="P"))["result"]["profile"]
+    profile = own_profile(client)
     profile["week"]["0"] = week_meals()
     resp = await call(client, "save_profile", profile=profile)
     assert resp["error"]["code"] == "invalid_format", label
@@ -83,11 +82,9 @@ async def test_shopping_respects_todo_permissions(hass, hass_ws_client, setup_en
     assert await async_setup_component(hass, TODO_DOMAIN, {})
     todo = _List()
     await hass.data[DATA_COMPONENT].async_add_entities([todo])
-    user = await hass.auth.async_create_user("Ospite", group_ids=["system-read-only"])
-    refresh = await hass.auth.async_create_refresh_token(user, CLIENT_ID)
-    reader = await hass_ws_client(hass, hass.auth.async_create_access_token(refresh))
+    reader = await _user_client(hass, hass_ws_client, "Ospite", "system-read-only")
 
-    profile = (await call(reader, "create_profile", name="P"))["result"]["profile"]
+    profile = own_profile(reader)
     profile["week"]["0"] = [meal("pasta", "12:00", [[{"alts": [item("Pasta", 80.0)]}]])]
     assert (await call(reader, "save_profile", profile=profile))["success"]
     resp = await call(
@@ -103,11 +100,11 @@ async def test_shopping_respects_todo_permissions(hass, hass_ws_client, setup_en
 async def test_commands_not_loaded_after_unload(hass, client):
     entry = hass.config_entries.async_entries(DOMAIN)[0]
     assert await hass.config_entries.async_unload(entry.entry_id)
-    resp = await call(client, "create_profile", name="Dopo")
+    resp = await call(client, "create_recipe", name="Dopo")
     assert resp["error"]["code"] == "not_loaded"
 
     assert await hass.config_entries.async_setup(entry.entry_id)
-    resp = await call(client, "create_profile", name="Riattivata")
+    resp = await call(client, "create_recipe", name="Riattivata")
     assert resp["success"], resp
 
 
@@ -115,7 +112,7 @@ async def test_commands_not_loaded_after_unload(hass, client):
 
 
 async def test_meal_id_proto_rejected(client):
-    profile = (await call(client, "create_profile", name="P"))["result"]["profile"]
+    profile = own_profile(client)
     profile["week"]["0"] = [meal("__proto__", "12:00", [[{"alts": [item("x", 1.0)]}]])]
     resp = await call(client, "save_profile", profile=profile)
     assert resp["error"]["code"] == "invalid_format"
@@ -126,7 +123,7 @@ async def test_meal_id_proto_rejected(client):
 
 async def test_commit_copies_store_independent_of_profiles_and_subscribers(hass, hass_ws_client, client, monkeypatch):
     for k in range(10):
-        assert (await call(client, "create_profile", name=f"p{k}"))["success"]
+        await hass.data[DOMAIN].async_create_profile(f"p{k}")
     await hass.async_block_till_done()
     for _ in range(3):
         sub = await _non_admin_client(hass, hass_ws_client)
@@ -144,7 +141,7 @@ async def test_commit_copies_store_independent_of_profiles_and_subscribers(hass,
         return real(obj, memo)
 
     monkeypatch.setattr(copy, "deepcopy", counting)
-    profile = (await call(client, "create_profile", name="last"))["result"]["profile"]
+    profile = own_profile(client)
     full_copies = 0
     assert (await call(client, "save_profile", profile=profile))["success"]
     await hass.async_block_till_done()
@@ -160,19 +157,12 @@ async def test_second_subscribe_on_same_connection_rejected(client):
     assert resp["error"]["code"] == "already_subscribed"
 
 
-async def test_profile_count_is_capped(hass, client):
-    for k in range(store_mod.MAX_PROFILES):
-        assert (await call(client, "create_profile", name=f"p{k}"))["success"]
-    resp = await call(client, "create_profile", name="troppi")
-    assert resp["error"]["code"] == "limit"
-
-
 # --- finding 7: recipe_qty filtering must not be quadratic, and stale revs fail first ---------------
 
 
 async def test_recipe_qty_filter_builds_alt_set_once_per_recipe(hass, client, monkeypatch):
     recipe = (await _recipe(client, [{"id": "i", "alts": _alts(5)}]))["result"]["recipe"]
-    profile = (await call(client, "create_profile", name="P"))["result"]["profile"]
+    profile = own_profile(client)
     profile["recipe_qty"] = {recipe["id"]: {f"a{k}": 2.0 for k in range(5)}}
 
     store = hass.data[DOMAIN]

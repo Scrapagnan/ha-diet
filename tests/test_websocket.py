@@ -11,6 +11,7 @@ from pytest_homeassistant_custom_component.common import (
 )
 
 from custom_components.shared_diet.const import DOMAIN
+from custom_components.shared_diet.store import MAX_PROFILES
 from custom_components.shared_diet.websocket import _qty
 
 CLIENT_ID = "https://example.com/shared-diet-test"
@@ -26,7 +27,8 @@ def meal(meal_id, time, options):
 
 
 def full_profile(base):
-    """A profile exercising every field of the data model."""
+    """A profile exercising every field of the data model (as the panel sends it: without user_id)."""
+    base = {k: v for k, v in base.items() if k != "user_id"}
     lunch = meal(
         "lunch",
         "12:30",
@@ -59,12 +61,26 @@ async def call(client, command, **data):
     return await client.receive_json()
 
 
-async def _non_admin_client(hass, hass_ws_client):
-    user = await hass.auth.async_create_user("Kid", group_ids=["system-users"])
-    assert user.is_admin is False
+async def _user_client(hass, hass_ws_client, name="Kid", group="system-users"):
+    """A websocket client for a new user; `client.store`/`client.user_id` find that user's own profile."""
+    user = await hass.auth.async_create_user(name, group_ids=[group])
+    assert user.is_admin is (group == "system-admin")
+    await hass.async_block_till_done()  # user_added gives the user a profile
     refresh = await hass.auth.async_create_refresh_token(user, CLIENT_ID)
-    token = hass.auth.async_create_access_token(refresh)
-    return await hass_ws_client(hass, token)
+    client = await hass_ws_client(hass, hass.auth.async_create_access_token(refresh))
+    client.store, client.user_id = hass.data.get(DOMAIN), user.id
+    return client
+
+
+async def _non_admin_client(hass, hass_ws_client):
+    return await _user_client(hass, hass_ws_client)
+
+
+def own_profile(client):
+    """The client's profile as the panel sends it back: without user_id, which only the server sets."""
+    profile = next(p for p in client.store.profiles.values() if p["user_id"] == client.user_id)
+    del profile["user_id"]
+    return profile
 
 
 @pytest.fixture
@@ -81,17 +97,17 @@ async def client(hass, hass_ws_client, setup_entry):
     return await _non_admin_client(hass, hass_ws_client)
 
 
-async def test_non_admin_can_create_and_save(client):
-    resp = await call(client, "create_profile", name="Luca")
-    assert resp["success"], resp
-    profile = resp["result"]["profile"]
+async def test_non_admin_saves_own_profile(client):
+    profile = own_profile(client)
+    assert profile["name"] == "Kid"
     profile["name"] = "Luca S."
     resp = await call(client, "save_profile", profile=profile)
     assert resp["success"] and resp["result"]["profile"]["rev"] == 2
+    assert resp["result"]["profile"]["user_id"] == client.user_id
 
 
 async def test_save_conflict_returns_error(client):
-    profile = (await call(client, "create_profile", name="Anna"))["result"]["profile"]
+    profile = own_profile(client)
     assert (await call(client, "save_profile", profile=profile))["success"]
     resp = await call(client, "save_profile", profile=profile)  # stale rev 1
     assert resp["success"] is False
@@ -100,14 +116,14 @@ async def test_save_conflict_returns_error(client):
 
 
 async def test_invalid_time_rejected(client):
-    profile = full_profile((await call(client, "create_profile", name="Luca"))["result"]["profile"])
+    profile = full_profile(own_profile(client))
     profile["week"]["0"][0]["time"] = "7:5"
     resp = await call(client, "save_profile", profile=profile)
     assert resp["error"]["code"] == "invalid_format"
 
 
 async def test_full_valid_profile_is_accepted(client):
-    profile = full_profile((await call(client, "create_profile", name="Luca"))["result"]["profile"])
+    profile = full_profile(own_profile(client))
     resp = await call(client, "save_profile", profile=profile)
     assert resp["success"], resp
     assert resp["result"]["profile"]["rev"] == 2
@@ -127,7 +143,7 @@ async def test_full_valid_profile_is_accepted(client):
         pytest.param(lambda p: p["week"]["0"][0].update({"shared_with": "all"}), id="shared-not-list"),
         pytest.param(lambda p: p["week"]["0"][0].update({"shared_with": [""]}), id="shared-empty-id"),
         pytest.param(lambda p: p["week"]["0"][0].update({"shared_with": [1]}), id="shared-non-string"),
-        pytest.param(lambda p: p["week"]["0"][0].update({"shared_with": [f"p{k}" for k in range(31)]}), id="shared-too-many"),
+        pytest.param(lambda p: p["week"]["0"][0].update({"shared_with": [f"p{k}" for k in range(MAX_PROFILES + 1)]}), id="shared-too-many"),
         pytest.param(lambda p: p["reminder"].update({"minutes": 241}), id="reminder-too-long"),
         pytest.param(lambda p: p["reminder"].update({"notify": "light.x"}), id="notify-wrong-domain"),
         pytest.param(lambda p: p.update({"person": "luca"}), id="person-wrong-domain"),
@@ -139,41 +155,64 @@ async def test_full_valid_profile_is_accepted(client):
     ],
 )
 async def test_invalid_profile_rejected(client, mutate):
-    profile = full_profile((await call(client, "create_profile", name="Luca"))["result"]["profile"])
+    profile = full_profile(own_profile(client))
     mutate(profile)
     resp = await call(client, "save_profile", profile=profile)
     assert resp["error"]["code"] == "invalid_format"
 
 
 async def test_save_unknown_profile_not_found(client):
-    profile = full_profile((await call(client, "create_profile", name="Luca"))["result"]["profile"])
+    profile = full_profile(own_profile(client))
     profile["id"] = "does-not-exist"
     resp = await call(client, "save_profile", profile=profile)
     assert resp["error"]["code"] == "not_found"
 
 
-async def test_delete_profile(client):
-    profile = (await call(client, "create_profile", name="Tom"))["result"]["profile"]
+async def test_only_admin_deletes_profiles(hass, hass_ws_client, client):
+    profile = own_profile(client)
     resp = await call(client, "delete_profile", profile_id=profile["id"])
+    assert resp["error"]["code"] == "unauthorized"
+    admin = await _user_client(hass, hass_ws_client, "Boss", "system-admin")
+    resp = await call(admin, "delete_profile", profile_id=profile["id"])
     assert resp["success"] and resp["result"] == {}
+    assert profile["id"] not in client.store.profiles
+
+
+async def test_non_admin_cannot_save_another_profile(hass, hass_ws_client, client):
+    other = await _user_client(hass, hass_ws_client, "Anna")
+    legacy = await client.store.async_create_profile("Vecchio")  # no user: admin only
+    targets = [(own_profile(other), other.user_id), (legacy, None)]
+    for target, _ in targets:
+        resp = await call(client, "save_profile", profile=full_profile(target))
+        assert resp["error"]["code"] == "unauthorized"
+    admin = await _user_client(hass, hass_ws_client, "Boss", "system-admin")
+    for target, owner in targets:
+        resp = await call(admin, "save_profile", profile=full_profile(target))
+        assert resp["success"], resp
+        assert resp["result"]["profile"]["user_id"] == owner
+
+
+async def test_profiles_are_not_created_by_hand(client):
+    resp = await call(client, "create_profile", name="X")
+    assert resp["error"]["code"] == "unknown_command"
 
 
 async def test_subscribe_pushes_on_change(client):
     await client.send_json_auto_id({"type": "shared_diet/subscribe"})
     assert (await client.receive_json())["success"]
     event = await client.receive_json()
-    assert event["type"] == "event" and event["event"] == {"profiles": {}, "recipes": {}}
+    assert event["type"] == "event" and event["event"] == {"profiles": client.store.profiles, "recipes": {}}
 
-    await client.send_json_auto_id({"type": "shared_diet/create_profile", "name": "Ana"})
+    await client.send_json_auto_id({"type": "shared_diet/save_profile", "profile": full_profile(own_profile(client))})
     msgs = [await client.receive_json(), await client.receive_json()]
     pushed = next(m for m in msgs if m["type"] == "event")
-    created = next(m for m in msgs if m["type"] == "result")["result"]["profile"]
-    assert pushed["event"]["profiles"] == {created["id"]: created}
+    saved = next(m for m in msgs if m["type"] == "result")["result"]["profile"]
+    assert pushed["event"]["profiles"][saved["id"]] == saved
 
 
 async def test_shopping_adds_to_todo(hass, client):
     calls = async_mock_service(hass, "todo", "add_item")
-    profile = (await call(client, "create_profile", name="Luca"))["result"]["profile"]
+    profile = own_profile(client)
     profile["week"]["0"] = [meal("pasta", "12:00", [[{"alts": [item("Pasta", 80.0)]}]])]
     assert (await call(client, "save_profile", profile=profile))["success"]
 
@@ -192,7 +231,7 @@ async def test_shopping_adds_to_todo(hass, client):
 
 async def test_shopping_preview_and_exclude(hass, client):
     calls = async_mock_service(hass, "todo", "add_item")
-    profile = (await call(client, "create_profile", name="Luca"))["result"]["profile"]
+    profile = own_profile(client)
     profile["week"]["0"] = [meal("pasta", "12:00", [[{"alts": [item("Pasta", 80.0)]}, {"alts": [item("Olio", 10.0, "ml")]}]])]
     assert (await call(client, "save_profile", profile=profile))["success"]
     base = {"start": MONDAY.isoformat(), "end": MONDAY.isoformat(), "profile_ids": None}
@@ -249,7 +288,7 @@ async def test_shopping_unknown_profile_not_found(client):
 async def test_commands_report_not_loaded_without_entry(hass, hass_ws_client):
     assert await async_setup_component(hass, DOMAIN, {})
     client = await _non_admin_client(hass, hass_ws_client)
-    resp = await call(client, "create_profile", name="X")
+    resp = await call(client, "create_recipe", name="X")
     assert resp["error"]["code"] == "not_loaded"
 
 

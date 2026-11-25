@@ -15,12 +15,8 @@ from .model import fold_name
 
 _LOGGER = logging.getLogger(__name__)
 
-# Each profile adds two sensors that re-resolve its meals every minute.
-MAX_PROFILES = 30
-
-
-class LimitError(Exception):
-    """Too many profiles."""
+# Cap on a meal's shared_with list. Profiles themselves are one per HA user, so the HA admin bounds their number.
+MAX_PROFILES = 100
 
 
 class ConflictError(Exception):
@@ -43,10 +39,11 @@ class InUseError(Exception):
         super().__init__("Ricetta usata da: " + ", ".join(profile_names))
 
 
-def _new_profile(name: str) -> dict:
+def _new_profile(name: str, user_id: str | None) -> dict:
     return {
         "id": uuid.uuid4().hex,
         "name": name,
+        "user_id": user_id,  # owning HA user; None for profiles created before users had one
         "person": None,
         "reminder": {"enabled": False, "minutes": 15, "notify": None},
         "week": {str(day): [] for day in range(7)},
@@ -80,6 +77,7 @@ class DietStore:
         self._recipes = data.get("recipes", {})
         for profile in self._profiles.values():
             profile.setdefault("recipe_qty", {})
+            profile.setdefault("user_id", None)
         for recipe in self._recipes.values():
             for ing in recipe["ingredients"]:
                 if "food" in ing and "alts" not in ing:  # pre-alternatives flat ingredient
@@ -104,13 +102,35 @@ class DietStore:
         profile = self._profiles.get(profile_id)
         return copy.deepcopy(profile) if profile is not None else None
 
-    async def async_create_profile(self, name: str) -> dict:
-        if len(self._profiles) >= MAX_PROFILES:
-            raise LimitError(MAX_PROFILES)
-        profile = _new_profile(name)
+    async def async_create_profile(self, name: str, user_id: str | None = None) -> dict:
+        profile = _new_profile(name, user_id)
         self._profiles[profile["id"]] = profile
         await self._async_commit()
         return copy.deepcopy(profile)
+
+    async def async_sync_users(self, users: dict[str, str], person_users: dict[str, str]) -> None:
+        """Gives every user (id -> name) a profile: first by linking an unowned profile whose person belongs to
+        the user (person entity -> user id), else a new one. Idempotent."""
+        owned = {p["user_id"] for p in self._profiles.values()}
+        changed = False
+        for profile in self._profiles.values():
+            user_id = person_users.get(profile["person"] or "")
+            if profile["user_id"] is None and user_id in users and user_id not in owned:
+                profile["user_id"] = user_id  # no rev bump: an open draft of it must still save
+                owned.add(user_id)
+                changed = True
+        for user_id, name in users.items():
+            if user_id not in owned:
+                profile = _new_profile(name, user_id)
+                self._profiles[profile["id"]] = profile
+                changed = True
+        if changed:
+            await self._async_commit()
+
+    async def async_delete_user_profile(self, user_id: str) -> None:
+        for profile_id, profile in list(self._profiles.items()):
+            if profile["user_id"] == user_id:
+                await self.async_delete_profile(profile_id)
 
     async def async_save_profile(self, profile: dict) -> dict:
         current = self._profiles.get(profile["id"])
@@ -119,6 +139,7 @@ class DietStore:
         if profile["rev"] != current["rev"]:
             raise ConflictError(profile["id"])
         saved = copy.deepcopy(profile)
+        saved["user_id"] = current["user_id"]  # ownership is not the client's to change
         for alt in _alts(saved):
             if "recipe" in alt and alt["recipe"] not in self._recipes:
                 raise UnknownRecipeError(alt["recipe"])

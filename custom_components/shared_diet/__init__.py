@@ -12,9 +12,10 @@ from homeassistant.components.http import StaticPathConfig
 from homeassistant.components.panel_custom import async_register_panel
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import Event, HomeAssistant
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import async_track_time_change
+from homeassistant.helpers.start import async_at_started
 from homeassistant.util import dt as dt_util
 
 from . import websocket
@@ -77,6 +78,15 @@ async def _send_reminders(hass: HomeAssistant, store: DietStore) -> None:
     await asyncio.gather(*(_send(service, data) for service, data in sends))
 
 
+async def _sync_users(hass: HomeAssistant, store: DietStore) -> None:
+    """One profile per non-system HA user; existing profiles are matched through their person's user."""
+    users = {u.id: u.name or "Utente" for u in await hass.auth.async_get_users() if not u.system_generated}
+    person_users = {
+        s.entity_id: s.attributes["user_id"] for s in hass.states.async_all("person") if s.attributes.get("user_id")
+    }
+    await store.async_sync_users(users, person_users)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if DOMAIN not in hass.data:
         store = DietStore(hass)
@@ -97,6 +107,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     async def _tick(_now: datetime) -> None:
         await _send_reminders(hass, store)
+
+    # After start: person states, used to match existing profiles to users, are loaded by then.
+    async def _started(_hass: HomeAssistant) -> None:
+        await _sync_users(hass, store)
+
+    async def _user_added(_event: Event) -> None:
+        await _sync_users(hass, store)
+
+    async def _user_removed(event: Event) -> None:
+        await store.async_delete_user_profile(event.data["user_id"])
+
+    entry.async_on_unload(async_at_started(hass, _started))
+    entry.async_on_unload(hass.bus.async_listen("user_added", _user_added))
+    entry.async_on_unload(hass.bus.async_listen("user_removed", _user_removed))
 
     # ponytail: tick every minute even when no meal is due; schedule per meal time if idle wakeups matter.
     entry.async_on_unload(async_track_time_change(hass, _tick, second=0))
