@@ -2,7 +2,7 @@ DOMAIN = "shared_diet"
 STORAGE_KEY = "shared_diet.data"
 STORAGE_VERSION = 1
 PANEL_URL = "shared-diet"
-VERSION = "0.4.0"
+VERSION = "0.5.0"
 
 # Shopping categories: the house list starts with these (fixed ids), in this order. "altro" catches every unmatched food
 # and cannot be deleted.
