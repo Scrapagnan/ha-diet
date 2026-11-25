@@ -3,7 +3,7 @@
 import pytest
 from pytest_homeassistant_custom_component.common import async_mock_service
 
-from test_websocket import MONDAY, call, client, meal, setup_entry  # noqa: F401
+from test_websocket import MONDAY, call, client, meal, own_profile, setup_entry  # noqa: F401
 
 ALT = {"id": "a1", "food": "Farina", "qty": 60.0, "unit": "g"}
 INGREDIENT = {"id": "i1", "alts": [dict(ALT)]}
@@ -73,18 +73,18 @@ async def test_save_unknown_recipe_not_found(client):
 
 async def test_delete_recipe_in_use_returns_error(client):
     recipe = await _create_recipe(client, ingredients=[dict(INGREDIENT)])
-    profile = (await call(client, "create_profile", name="Luca"))["result"]["profile"]
+    profile = own_profile(client)
     profile["week"]["0"] = [meal("pancake", "08:00", [[{"alts": [{"recipe": recipe["id"]}]}]])]
     assert (await call(client, "save_profile", profile=profile))["success"]
 
     resp = await call(client, "delete_recipe", recipe_id=recipe["id"])
     assert resp["error"]["code"] == "in_use"
-    assert resp["error"]["message"] == "Ricetta usata da: Luca"
+    assert resp["error"]["message"] == "Ricetta usata da: Kid"
 
 
 async def test_profile_with_recipe_item_accepted(client):
     recipe = await _create_recipe(client, ingredients=[dict(INGREDIENT)])
-    profile = (await call(client, "create_profile", name="Luca"))["result"]["profile"]
+    profile = own_profile(client)
     profile["week"]["0"] = [meal("pancake", "08:00", [[{"alts": [{"recipe": recipe["id"]}]}]])]
     resp = await call(client, "save_profile", profile=profile)
     assert resp["success"], resp
@@ -102,7 +102,7 @@ async def test_profile_with_recipe_item_accepted(client):
     ],
 )
 async def test_invalid_recipe_item_rejected(client, alt):
-    profile = (await call(client, "create_profile", name="Luca"))["result"]["profile"]
+    profile = own_profile(client)
     if alt.get("recipe") == "r1":
         recipe = await _create_recipe(client)
         alt = {**alt, "recipe": recipe["id"]}
@@ -112,7 +112,7 @@ async def test_invalid_recipe_item_rejected(client, alt):
 
 
 async def test_deleted_recipe_reference_has_specific_message(client):
-    profile = (await call(client, "create_profile", name="Luca"))["result"]["profile"]
+    profile = own_profile(client)
     profile["week"]["0"] = [meal("pancake", "08:00", [[{"alts": [{"recipe": "gone"}]}]])]
     resp = await call(client, "save_profile", profile=profile)
     assert resp["error"]["code"] == "invalid_format"
@@ -121,7 +121,7 @@ async def test_deleted_recipe_reference_has_specific_message(client):
 
 async def test_recipe_qty_saved_and_invalid_values_rejected(client):
     recipe = await _create_recipe(client, ingredients=[dict(INGREDIENT)])
-    profile = (await call(client, "create_profile", name="Luca"))["result"]["profile"]
+    profile = own_profile(client)
 
     profile["recipe_qty"] = {recipe["id"]: {"a1": 30.0, "i1": 5.0, "gone": 5.0}}
     resp = await call(client, "save_profile", profile=profile)
@@ -197,7 +197,7 @@ async def test_recipe_ingredient_qty_may_be_null(client):
     ],
 )
 async def test_invalid_choice_rejected(client, choice):
-    profile = (await call(client, "create_profile", name="Luca"))["result"]["profile"]
+    profile = own_profile(client)
     profile["choices"]["defaults"] = {"pancake": choice}
     resp = await call(client, "save_profile", profile=profile)
     assert resp["error"]["code"] == "invalid_format"
@@ -205,7 +205,7 @@ async def test_invalid_choice_rejected(client, choice):
 
 async def test_choice_with_recipes_accepted(client):
     recipe = await _create_recipe(client, ingredients=[dict(INGREDIENT)])
-    profile = (await call(client, "create_profile", name="Luca"))["result"]["profile"]
+    profile = own_profile(client)
     profile["week"]["0"] = [meal("pancake", "08:00", [[{"alts": [{"recipe": recipe["id"]}]}]])]
     profile["choices"]["defaults"] = {"pancake": {"option": 0, "lines": {}, "recipes": {recipe["id"]: {"i1": "a1"}}}}
     resp = await call(client, "save_profile", profile=profile)
@@ -218,7 +218,7 @@ async def test_subscribe_pushes_recipes(client):
     await client.send_json_auto_id({"type": "shared_diet/subscribe"})
     assert (await client.receive_json())["success"]
     event = await client.receive_json()
-    assert event["event"] == {"profiles": {}, "recipes": {}}
+    assert event["event"]["recipes"] == {}
 
     await client.send_json_auto_id({"type": "shared_diet/create_recipe", "name": "Crepes"})
     msgs = [await client.receive_json(), await client.receive_json()]
@@ -236,7 +236,7 @@ async def test_shopping_expands_recipe_ingredients(hass, client):
             {"id": "i2", "alts": [{"id": "a2", "food": "Uova", "qty": 1.0, "unit": "pz"}]},
         ],
     )
-    profile = (await call(client, "create_profile", name="Luca"))["result"]["profile"]
+    profile = own_profile(client)
     profile["week"]["0"] = [meal("pancake", "08:00", [[{"alts": [{"recipe": recipe["id"]}]}]])]
     assert (await call(client, "save_profile", profile=profile))["success"]
 

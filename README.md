@@ -1,6 +1,8 @@
 # Shared Diet
 
-Integrazione per Home Assistant che gestisce le diete settimanali di tutta la famiglia: ogni profilo ha la sua settimana di pasti, con alternative, eccezioni per date e promemoria. Tutti gli utenti di casa (anche non amministratori, dall'app Companion sul telefono) possono consultare e modificare le diete dal pannello **Dieta**.
+Integrazione per Home Assistant che gestisce le diete settimanali di tutta la famiglia: ogni profilo ha la sua settimana di pasti, con alternative, eccezioni per date e promemoria. Ogni utente di Home Assistant ha automaticamente il suo profilo (creato all'avvio e quando si aggiunge un utente, eliminato con l'utente). Tutti gli utenti di casa (anche dall'app Companion sul telefono) consultano tutte le diete dal pannello **Dieta**; un utente non amministratore modifica solo il proprio profilo e vede gli altri in sola lettura. Gli amministratori modificano ed eliminano tutti i profili.
+
+I profili creati prima di questa versione vengono collegati all'utente della persona collegata (se quell'utente non ha già un profilo); gli altri restano senza utente, modificabili solo dagli amministratori.
 
 ## Installazione con HACS
 
@@ -21,7 +23,7 @@ Dopo l'installazione compare **Dieta** nella barra laterale. Le schede sono:
 - **Scelte**: per un intervallo di date, scegli l'opzione e l'alternativa di ogni pasto. Il predefinito vale per tutte le date; "Ritocca per questa data" cambia solo quel giorno. Le ricette del percorso scelto mostrano anche le tendine delle loro alternative ingrediente (vedi sotto).
 - **Ricette**: il ricettario condiviso, da cui si aggiungono ricette ai pasti (vedi sotto).
 - **Spesa**: sceglie intervallo di date e profili, poi aggiunge gli alimenti alla lista To-do selezionata (quantità sommate per alimento e unità).
-- **Profili**: crea, rinomina ed elimina profili; collega una persona; configura il promemoria (minuti prima del pasto e servizio di notifica).
+- **Profili**: rinomina il profilo, collega una persona, configura il promemoria (minuti prima del pasto e servizio di notifica). Solo gli amministratori eliminano profili.
 
 Ogni salvataggio invia l'intero profilo. Se un altro utente ha salvato nel frattempo, il pannello mostra "Modificato da un altro utente, dati ricaricati" e ricarica i dati aggiornati.
 
