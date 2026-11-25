@@ -94,6 +94,8 @@ details p { white-space: pre-line; margin: 6px 0; }
 .sqty { display: flex; align-items: center; gap: 4px; flex: 0 0 auto; }
 .sqty input { width: 80px; }
 .sqty .unit { min-width: 2.5em; }
+.nqty { width: 80px; }
+.nunit { width: 72px; }
 .lgroup { margin-top: 24px; padding-top: 12px; border-top: 2px solid var(--divider-color, #e0e0e0); }
 .lgroup h3 { margin: 0 0 8px; }
 .page-head .chips .chip { flex: 0 0 auto; padding: 6px 12px; }
@@ -147,9 +149,15 @@ const splitQty = (s) => s.match(/^(.+?) - (\d[\d.,e+-]*(?: .*)?)$/) ?? s.match(/
 const cardText = (s) => { const m = splitQty(s); return m ? `${esc(m[1])}<span class="lqty">${esc(m[2])}</span>` : esc(s); };
 
 // Text fields a push must not re-render under the user's typing (see _onData and focusout).
-const TYPING = '[data-ch="catname"], #newcat, #newitem';
+const TYPING = '[data-ch="catname"], #newcat, #newitem, #newqty, #newunit';
 
 const MAX_SHOP_QTY = 100000; // as the server's cap on an edited shopping quantity
+
+// Text of an item typed by hand with a quantity, as the server writes diet rows: "Latte - 1,5 l", over 1000 g in kg.
+const shopText = (food, qty, unit) => {
+  if (unit.toLowerCase() === "g" && qty > 1000) [qty, unit] = [qty / 1000, "kg"];
+  return `${food} - ${String(+qty.toPrecision(6)).replace(".", ",")}${unit ? ` ${unit}` : ""}`;
+};
 
 // Edited quantities to send with "Aggiungi alla lista": {row text: qty} for selected rows with a quantity whose field
 // was changed. An empty field keeps the computed quantity; anything else must be a number > 0.
@@ -423,7 +431,7 @@ class SharedDietPanel extends HTMLElement {
     this.shadowRoot.addEventListener("pointerdown", (e) => this._dragStart(e));
     this.shadowRoot.addEventListener("keydown", (e) => this._gripKey(e));
     this.shadowRoot.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && e.target.id === "newitem" && !this._busy) this._addListItem();
+      if (e.key === "Enter" && ["newitem", "newqty", "newunit"].includes(e.target.id) && !this._busy) this._addListItem();
     });
     this.shadowRoot.addEventListener("focusout", (e) => {
       if (e.target.classList?.contains("food")) this._hideSugg();
@@ -914,13 +922,20 @@ class SharedDietPanel extends HTMLElement {
 
   // An item typed by hand, outside the diet: added to the family list, the field kept focused for the next one.
   _addListItem() {
-    const text = this.shadowRoot.getElementById("newitem")?.value.trim();
-    if (!text) return this._flash("Scrivi l'articolo da aggiungere");
-    this._todoList.newItem = text; // survives the re-renders; cleared only once added
+    const val = (id) => this.shadowRoot.getElementById(id)?.value.trim() ?? "";
+    const [name, rawQty, unit] = [val("newitem"), val("newqty"), val("newunit")];
+    if (!name) return this._flash("Scrivi l'articolo da aggiungere");
+    const qty = Number(rawQty);
+    const badQty = this.shadowRoot.getElementById("newqty")?.validity?.badInput || (rawQty && !(qty > 0 && qty <= MAX_SHOP_QTY));
+    if (badQty) return this._flash("Quantità non valida");
+    if (unit && !rawQty) return this._flash("Indica la quantità per l'unità");
+    // Survive the re-renders; cleared only once added.
+    Object.assign(this._todoList, { newItem: name, newQty: rawQty, newUnit: unit });
     this._focus = "#newitem";
+    const text = rawQty ? shopText(name, qty, unit) : name;
     return this._run(async () => {
       await this._hass.callService("todo", "add_item", { item: text }, { entity_id: this._todoList.entity });
-      this._todoList.newItem = "";
+      Object.assign(this._todoList, { newItem: "", newQty: "", newUnit: "" });
     }, "Articolo aggiunto");
   }
 
@@ -1296,6 +1311,8 @@ class SharedDietPanel extends HTMLElement {
     if (el.classList.contains("food")) this._suggest(el);
     if (el.id === "newcat") this._shop.newCat = el.value;
     if (el.id === "newitem") this._todoList.newItem = el.value;
+    if (el.id === "newqty") this._todoList.newQty = el.value;
+    if (el.id === "newunit") this._todoList.newUnit = el.value;
   }
 
   _onChange(e) {
@@ -1705,6 +1722,11 @@ class SharedDietPanel extends HTMLElement {
         (done.length ? `<details class="lgroup" id="done"${doneOpen ? " open" : ""}><summary>Completati (${done.length})</summary>${listHtml(done)}</details>` : "");
     const add = !this._todoList.entity ? "" : `<div class="row"><input class="grow" id="newitem" maxlength="255"
         placeholder="Articolo fuori dieta (es. Detersivo)" aria-label="Nuovo articolo" value="${esc(this._todoList.newItem ?? "")}">
+        <input id="newqty" class="nqty" type="number" min="0" max="${MAX_SHOP_QTY}" step="any" inputmode="decimal" placeholder="Qtà"
+          aria-label="Quantità" value="${esc(this._todoList.newQty ?? "")}">
+        <input id="newunit" class="nunit" list="units" maxlength="10" placeholder="Unità" aria-label="Unità di misura"
+          value="${esc(this._todoList.newUnit ?? "")}">
+        <datalist id="units">${["g", "kg", "ml", "l", "pz", "conf"].map((u) => `<option value="${u}">`).join("")}</datalist>
         <button data-act="ladd">Aggiungi</button></div>`;
     return `<div class="page-head"><h2>Lista</h2><div class="chips">${viewBtn("check", "Checkbox")}${viewBtn("card", "Card")}</div></div>
       ${add}${body}`;
