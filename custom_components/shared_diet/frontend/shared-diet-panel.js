@@ -1617,6 +1617,8 @@ class SharedDietPanel extends HTMLElement {
     const card = (i) => i.status === "completed"
       ? `<button class="lcard done" data-act="litem" data-uid="${esc(i.uid)}" aria-label="Riapri ${esc(i.summary)}">${esc(i.summary)}</button>`
       : `<button class="lcard" data-act="litem" data-uid="${esc(i.uid)}" aria-label="Completa ${esc(i.summary)}">${esc(i.summary)}</button>`;
+    // Kept open across re-renders (a tick inside it re-renders the tab) once the user opened it.
+    const doneOpen = this.shadowRoot.getElementById("done")?.open;
     const listHtml = (list) => (view === "card" ? `<div class="lcards">${list.map(card).join("")}</div>` : list.map(check).join(""));
     const groups = order.map((cid) => {
       const group = open.filter((i) => catOf(i) === cid);
@@ -1629,7 +1631,7 @@ class SharedDietPanel extends HTMLElement {
       : items === null ? `<p class="muted">Caricamento…</p>`
       : !items.length ? `<p class="muted">Lista vuota.</p>`
       : (groups || `<p class="muted">Tutto preso.</p>`) +
-        (done.length ? `<details class="lgroup"><summary>Completati (${done.length})</summary>${listHtml(done)}</details>` : "");
+        (done.length ? `<details class="lgroup" id="done"${doneOpen ? " open" : ""}><summary>Completati (${done.length})</summary>${listHtml(done)}</details>` : "");
     return `<div class="page-head"><h2>Lista</h2><div class="chips">${viewBtn("check", "Checkbox")}${viewBtn("card", "Card")}</div></div>
       ${body}`;
   }
