@@ -50,7 +50,7 @@ Le ricette sono piatti composti da ingredienti, salvati una volta sola e usabili
 
 Per ogni profilo vengono creati due sensori, dove `<nome>` è il nome del profilo in minuscolo (es. `luca`):
 
-- `sensor.<nome>_pasto_attuale`: nome del pasto in corso (vuoto se non c'è un pasto attuale). Attributi: `time`, `items`, `option`, `profile_id`, `person`, `summary`, `minutes_until`.
+- `sensor.<nome>_pasto_attuale`: nome del pasto in corso (vuoto se non c'è un pasto attuale). Attributi: `time`, `items`, `option`, `profile_id`, `person`, `summary`.
 - `sensor.<nome>_prossimo_pasto`: nome del pasto con orario **più vicino all'ora attuale**, prima o dopo. Stesso schema di attributi.
 
 Il prossimo pasto si sceglie tra tutti i pasti con orario di oggi e il primo pasto con orario del primo giorno successivo che ne ha (fino a 7 giorni). Vince quello con la distanza minore dall'ora attuale; a parità vince quello futuro. I pasti di ieri non contano mai: dopo mezzanotte si guarda solo il giorno corrente. Esempio: pranzo 13:00, merenda 16:30; alle 13:20 il prossimo pasto è ancora il pranzo (20 minuti contro 3 ore e 10), dalle 14:45 la merenda.
@@ -61,10 +61,7 @@ I pasti senza orario non compaiono mai come attuali o prossimi e non generano pr
 
 Se un pasto contiene una ricetta, `items` riporta una voce per ricetta nel formato `Pancake: Farina 60 g, Uova 1 pz` (nome, poi gli ingredienti con le grammature della persona). La nota di preparazione non è negli attributi del sensore: appare in **Oggi**, sotto "Preparazione".
 
-Per i widget:
-
-- `summary`: una riga pronta, es. `Pranzo 13:00 - Pasta 80 g, Zucchine 200 g`; vuoto senza pasto.
-- `minutes_until`: minuti dall'ora attuale all'orario del pasto, negativi se è già iniziato; vuoto senza pasto. Cambia ogni minuto, quindi non viene salvato nello storico.
+Per i widget, `summary` è una riga pronta, es. `Pranzo 13:00 - Pasta 80 g, Zucchine 200 g`; vuoto senza pasto.
 
 ## Esempio di automazione
 
@@ -117,8 +114,6 @@ Android, widget **Template**:
 
 ```jinja
 {{ state_attr('sensor.luca_prossimo_pasto', 'summary') or 'Nessun pasto' }}
-{% set m = state_attr('sensor.luca_prossimo_pasto', 'minutes_until') %}
-{% if m is number and m > 0 %}tra {{ m }} min{% endif %}
 ```
 
 iOS: widget **Details** (Dettagli), che mostra righe di testo da template: per esempio `{{ state_attr('sensor.luca_prossimo_pasto', 'summary') or 'Nessun pasto' }}` nella prima riga.

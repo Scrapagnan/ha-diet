@@ -109,10 +109,7 @@ def nearest_meal(profile: dict, now: datetime, todays: list[dict] | None = None)
 def current_and_next(
     profile: dict, now: datetime, recipes: dict | None = None
 ) -> tuple[dict | None, dict | None]:
-    """Resolved current meal (today, last one at or before now) and next meal (the nearest one, see nearest_meal).
-
-    Each also has its "date": the next meal may be tomorrow's (or later).
-    """
+    """Resolved current meal (today, last one at or before now) and next meal (the nearest one, see nearest_meal)."""
     today = now.date()
     hm = now.strftime("%H:%M")
     todays = _timed(effective_day(profile, today))
@@ -121,12 +118,9 @@ def current_and_next(
     cur_day = today
     nxt, nxt_day = nearest_meal(profile, now, todays)
 
-    def resolved(meal: dict | None, day: date) -> dict | None:
-        if meal is None:
-            return None
-        return {**resolve_meal(meal, choice_for(profile, day, meal["id"]), profile, recipes), "date": day}
-
-    return resolved(cur, cur_day), resolved(nxt, nxt_day)
+    cur_r = resolve_meal(cur, choice_for(profile, cur_day, cur["id"]), profile, recipes) if cur else None
+    nxt_r = resolve_meal(nxt, choice_for(profile, nxt_day, nxt["id"]), profile, recipes) if nxt else None
+    return cur_r, nxt_r
 
 
 def category_for(food: str, categories: list[dict], overrides: dict[str, str], keywords: dict[str, str] = FOOD_KEYWORDS) -> str:

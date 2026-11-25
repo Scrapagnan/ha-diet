@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import vm from "node:vm";
 import { coreSource } from "./load.mjs";
 
-const ctx = {};
+const ctx = { setTimeout, clearTimeout };
 vm.createContext(ctx);
 const { subscribeDiet } = vm.runInContext(`${coreSource()}\n;({ subscribeDiet });`, ctx);
 const tick = () => new Promise((r) => setTimeout(r, 0));
@@ -41,6 +41,17 @@ function conn({ fail = false } = {}) {
   assert.equal(c.closed, 1); // the last one closes it
   subscribeDiet(hass, () => {});
   assert.equal(c.opened, 2); // a new subscriber opens a new one
+}
+
+{
+  // Unsubscribed and resubscribed in the same task (a card moved in the DOM): the open subscription is reused.
+  const c = conn();
+  const hass = { connection: c };
+  const un = subscribeDiet(hass, () => {});
+  un();
+  subscribeDiet(hass, () => {});
+  await tick();
+  assert.deepEqual([c.opened, c.closed], [1, 0]);
 }
 
 {

@@ -28,7 +28,9 @@ class SharedDietCard extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
-    this.shadowRoot.addEventListener("click", () => {
+    this.shadowRoot.addEventListener("click", (e) => {
+      // Not while configuring the dashboard (editor preview, edit mode), nor when opening a recipe's Preparazione.
+      if (this.preview || this.editMode || e.target.closest("details")) return;
       history.pushState(null, "", PANEL_PATH);
       window.dispatchEvent(new CustomEvent("location-changed"));
     });
@@ -48,8 +50,15 @@ class SharedDietCard extends HTMLElement {
 
   connectedCallback() {
     if (this._hass && !this._unsub) this._subscribe();
-    // The "Prossimo" highlight follows the clock, as in the panel's Oggi.
-    this._tick = setInterval(() => this._render(), 60000);
+    // The "Prossimo" highlight follows the clock, as in the panel's Oggi. After an error (integration not loaded,
+    // e.g. during a reload) the subscription is retried once a minute.
+    this._tick = setInterval(() => {
+      if (this._error && this._hass) {
+        this._unsub?.();
+        this._subscribe();
+      }
+      this._render();
+    }, 60000);
   }
 
   disconnectedCallback() {

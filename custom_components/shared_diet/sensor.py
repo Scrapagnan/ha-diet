@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, time
+from datetime import datetime
 
 from homeassistant.components.sensor import DOMAIN as SENSOR_DOMAIN, SensorEntity
 from homeassistant.config_entries import ConfigEntry
@@ -20,8 +20,6 @@ from .store import DietStore
 class MealSensor(SensorEntity):
     _attr_has_entity_name = False
     _attr_should_poll = False
-    # Changes every minute: kept out of the history database.
-    _unrecorded_attributes = frozenset({"minutes_until"})
 
     def __init__(self, store: DietStore, profile_id: str, name: str, current: bool) -> None:
         self._store = store
@@ -73,16 +71,9 @@ class MealSensor(SensorEntity):
             "option": meal["option"] if meal else None,
             "profile_id": self._profile_id,
             "person": self._person(),
-            # Phone widgets (Companion app): one ready line, and the minutes to the meal (negative once started).
+            # Phone widgets (Companion app): one ready line.
             "summary": " - ".join(filter(None, [f"{meal['name']} {meal['time']}", ", ".join(items)])) if meal else None,
-            "minutes_until": self._minutes_until(meal) if meal else None,
         }
-
-    @staticmethod
-    def _minutes_until(meal: dict) -> int:
-        now = dt_util.now()
-        at = datetime.combine(meal["date"], time.fromisoformat(meal["time"]), now.tzinfo)
-        return round((at.timestamp() - now.timestamp()) / 60)  # real elapsed time, DST-safe
 
 
 async def async_setup_entry(

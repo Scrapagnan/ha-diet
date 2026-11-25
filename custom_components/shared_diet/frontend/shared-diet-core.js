@@ -209,13 +209,19 @@ function subscribeDiet(hass, cb) {
       return null;
     });
   }
+  clearTimeout(s.closing); // resubscribed before the close: keep the open subscription
   s.cbs.add(cb);
   if (s.last) cb(s.last);
   else if (s.error) cb(null, s.error);
   return () => {
     if (!s.cbs.delete(cb) || s.cbs.size) return;
-    if (SUBS.get(conn) === s) SUBS.delete(conn);
-    s.unsub.then((unsub) => unsub?.(), () => {});
+    // Closed on the next task: a card moved in the DOM (disconnect + connect at once) reuses it instead of
+    // sending a second subscribe before the server has dropped this one (already_subscribed).
+    s.closing = setTimeout(() => {
+      if (s.cbs.size) return;
+      if (SUBS.get(conn) === s) SUBS.delete(conn);
+      s.unsub.then((unsub) => unsub?.(), () => {});
+    });
   };
 }
 
