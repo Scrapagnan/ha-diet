@@ -68,5 +68,7 @@ _KEYWORDS = {
         "latte di avena, bevanda vegetale"
     ),
 }
+# A keyword of these categories decides wherever it is in the name ("Spinaci surgelati" -> surgelati).
+QUALIFIER_CATEGORIES = {"surgelati"}
 # Keyword -> default category id, matched as whole words on the folded food name (see model.category_for).
 FOOD_KEYWORDS = {kw.strip(): cid for cid, words in _KEYWORDS.items() for kw in words.split(",")}

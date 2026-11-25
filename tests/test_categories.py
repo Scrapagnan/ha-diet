@@ -24,7 +24,11 @@ CATS = DEFAULT_CATEGORIES
         ("  MELE golden ", "frutta_verdura"),
         ("Caffè", "dispensa"),  # accents folded
         ("Fiocchi d'avena", "pasta_cereali"),  # punctuation ignored
-        ("Latte di soia", "bevande"),  # longest keyword wins over "latte"
+        ("Latte di soia", "bevande"),  # same start as "latte": the longest wins
+        ("Yogurt alla fragola", "latticini_uova"),  # the first food in the name wins
+        ("Olio di semi", "condimenti"),
+        ("Gelato al cioccolato", "surgelati"),
+        ("Spinaci surgelati", "surgelati"),  # qualifier wins wherever it is
         ("Latte", "latticini_uova"),
         ("Verdure surgelate", "surgelati"),
         ("Pollame", "altro"),  # whole words only: "pollo" is not in "pollame"

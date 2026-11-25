@@ -625,7 +625,9 @@ const RECIPES = {
   const html = p._body();
   const heads = [...html.matchAll(/<h3>([^<]+)<\/h3>/g)].map((m) => m[1]);
   assert.deepEqual(heads, ["Carne", "Frutta", "Altro"]);
-  assert.match(html, /data-ch="scat" data-i="1" aria-label="Categoria di Pollo"><option value="carne" selected>/);
+  assert.match(html, /data-ch="scat" data-i="1" aria-label="Categoria di Pollo"><option value="">Automatica<\/option><option value="carne">/);
+  p._foodCats = { pollo: "carne" }; // hand-picked: selected by name
+  assert.match(p._body(), /aria-label="Categoria di Pollo"><option value="">Automatica<\/option><option value="carne" selected>/);
   assert.match(html, /data-act="catdel" data-cid="nuova"/);
   assert.doesNotMatch(html, /data-act="catdel" data-cid="altro"/);
   assert.match(html, /data-act="catup" data-cid="carne" aria-label="Sposta su" disabled/);
@@ -656,9 +658,24 @@ const RECIPES = {
   await p._setFoodCategory(0, "altro"); // the food name, not the row text
   assert.deepEqual(sent.at(-1), { type: "shared_diet/set_food_category", food: "Mele", category_id: "altro" });
   const before = sent.length;
-  await p._setFoodCategory(0, "frutta"); // unchanged: nothing sent
+  await p._setFoodCategory(0, ""); // already automatic: nothing sent
   await p._renameCategory("carne", { value: "  Carne " });
   assert.equal(sent.length, before);
+  // A push while typing in a category field neither reloads nor re-renders; the next action catches up.
+  let loads = 0;
+  const realLoad = p._loadShop;
+  p._loadShop = () => { loads++; };
+  p.shadowRoot.activeElement = { matches: (sel) => sel.includes("#newcat") };
+  p._onData({}, {}, p._categories, p._foodCats);
+  assert.equal(loads, 0);
+  assert.equal(p._shop.stale, true);
+  p.shadowRoot.activeElement = null;
+  await p._run(async () => {});
+  assert.equal(loads, 1);
+  p._loadShop = realLoad;
+  p._shop.stale = false;
+  await p._setFoodCategory(1, ""); // back to automatic
+  assert.deepEqual(sent.at(-1), { type: "shared_diet/set_food_category", food: "Pollo", category_id: null });
   await p._renameCategory("carne", { value: " Macelleria " });
   assert.deepEqual(sent.at(-1), { type: "shared_diet/rename_category", category_id: "carne", name: "Macelleria" });
 }

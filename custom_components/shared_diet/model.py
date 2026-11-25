@@ -4,7 +4,7 @@ import re
 import unicodedata
 from datetime import date, datetime, time, timedelta
 
-from .const import DEFAULT_CATEGORIES, FALLBACK_CATEGORY, FOOD_KEYWORDS
+from .const import DEFAULT_CATEGORIES, FALLBACK_CATEGORY, FOOD_KEYWORDS, QUALIFIER_CATEGORIES
 
 
 def fold_name(s: str) -> str:
@@ -124,15 +124,17 @@ def current_and_next(
 
 
 def category_for(food: str, categories: list[dict], overrides: dict[str, str], keywords: dict[str, str] = FOOD_KEYWORDS) -> str:
-    """Category id of a food: its override, else the longest keyword found as whole words in the folded name, else "altro".
-    A category that no longer exists counts as no match."""
+    """Category id of a food: its override, else the keyword found (as whole words in the folded name) that comes first in
+    the name, longest on a tie ("Yogurt alla fragola" -> yogurt, "Latte di soia" -> latte di soia), else "altro".
+    A qualifier keyword ("surgelati") wins wherever it is. A category that no longer exists counts as no match."""
     ids = {c["id"] for c in categories}
     key = fold_name(food)
     if overrides.get(key) in ids:
         return overrides[key]
     words = " " + " ".join(re.findall(r"\w+", key)) + " "  # punctuation-free, so "d'avena" matches "d avena"
     hits = [kw for kw in keywords if f" {kw} " in words]
-    guess = keywords[max(hits, key=len)] if hits else None
+    rank = lambda kw: (keywords[kw] in QUALIFIER_CATEGORIES, -words.index(f" {kw} "), len(kw))  # noqa: E731
+    guess = keywords[max(hits, key=rank)] if hits else None
     return guess if guess in ids else FALLBACK_CATEGORY
 
 

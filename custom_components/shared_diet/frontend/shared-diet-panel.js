@@ -347,6 +347,7 @@ class SharedDietPanel extends HTMLElement {
     this._profiles = null; // last subscribe payload
     this._recipes = {}; // recipe book from the same payload, by id
     this._categories = []; // the house's shopping categories [{id, name}], same payload
+    this._foodCats = {}; // folded food name -> category id chosen by hand, same payload
     this._loadError = "";
     this._profileId = null;
     this._draft = null; // editable copy of the selected profile
@@ -370,7 +371,12 @@ class SharedDietPanel extends HTMLElement {
     for (const ev of ["pointerdown", "mousedown"])
       this.shadowRoot.addEventListener(ev, (e) => { if (e.target.closest(".sugg")) e.preventDefault(); });
     this.shadowRoot.addEventListener("keydown", (e) => this._suggKey(e));
-    this.shadowRoot.addEventListener("focusout", (e) => { if (e.target.classList?.contains("food")) this._hideSugg(); });
+    this.shadowRoot.addEventListener("focusout", (e) => {
+      if (e.target.classList?.contains("food")) this._hideSugg();
+      // Left a category field for nothing clickable in the panel: catch up on the pushes skipped while typing.
+      // Towards a button, the action it runs reloads instead (a render now would swallow the click).
+      if (this._shop.stale && !e.relatedTarget && e.target.matches?.('[data-ch="catname"], #newcat')) this._loadShop();
+    });
   }
 
   // Food names already used anywhere (all profiles, saved or still being edited), one per spelling-insensitive name.
@@ -480,7 +486,7 @@ class SharedDietPanel extends HTMLElement {
 
   _subscribe() {
     this._unsub = this._hass.connection
-      .subscribeMessage((msg) => this._onData(msg.profiles, msg.recipes, msg.categories), { type: "shared_diet/subscribe" })
+      .subscribeMessage((msg) => this._onData(msg.profiles, msg.recipes, msg.categories, msg.food_categories), { type: "shared_diet/subscribe" })
       .catch((err) => {
         this._loadError = err?.message || "Impossibile caricare i dati";
         this._render();
@@ -489,10 +495,11 @@ class SharedDietPanel extends HTMLElement {
   }
 
   // Latest server data. Unsaved edits to the selected profile survive; a deleted profile resets the selection.
-  _onData(profiles, recipes, categories) {
+  _onData(profiles, recipes, categories, foodCats) {
     this._profiles = profiles;
     this._recipes = recipes ?? {};
     this._categories = categories ?? [];
+    this._foodCats = foodCats ?? {};
     if (!profiles[this._profileId]) {
       this._profileId = this._ownId() ?? Object.keys(profiles)[0] ?? null;
       this._draft = null;
@@ -511,6 +518,10 @@ class SharedDietPanel extends HTMLElement {
         el.innerHTML = this._noticeHtml();
         return;
       }
+    }
+    if (this._view === "shop" && this.shadowRoot.activeElement?.matches?.('[data-ch="catname"], #newcat')) {
+      this._shop.stale = true; // reloaded when the field is left (focusout) or by the next action (_run)
+      return;
     }
     if (this._view === "shop") this._loadShop();
     this._render();
@@ -653,7 +664,8 @@ class SharedDietPanel extends HTMLElement {
       this._flash(err?.message || "Operazione non riuscita");
     } finally {
       this._busy = false;
-      this._render();
+      if (this._shop.stale && this._view === "shop") this._loadShop(); // renders too
+      else this._render();
     }
   }
 
@@ -771,6 +783,7 @@ class SharedDietPanel extends HTMLElement {
   async _loadShop() {
     if (!this._profiles) return; // _onData loads it once the data arrives
     const seq = ++this._shop.seq;
+    this._shop.stale = false;
     const msg = this._shopMsg();
     this._shop.preview = null;
     this._shop.failed = false;
@@ -864,10 +877,16 @@ class SharedDietPanel extends HTMLElement {
   }
 
   // Valid for every profile and every user: the push that follows reloads the preview.
+  // "" = automatic: the override goes and the food follows its name again.
   _setFoodCategory(i, id) {
     const row = this._shop.preview?.[i];
-    if (!row || row.category === id) return;
-    return this._run(() => this._hass.callWS({ type: "shared_diet/set_food_category", food: row.food, category_id: id }));
+    if (!row || id === this._manualCat(row)) return;
+    return this._run(() => this._hass.callWS({ type: "shared_diet/set_food_category", food: row.food, category_id: id || null }));
+  }
+
+  // The row's hand-picked category, "" when it is automatic.
+  _manualCat(row) {
+    return own(this._foodCats, foldText(row.food)) ? row.category : "";
   }
 
   // Meal list addressed by ctx: "w<weekday>" (weekly schema).
@@ -1046,6 +1065,7 @@ class SharedDietPanel extends HTMLElement {
     if (this._busy || !["INPUT", "TEXTAREA"].includes(el.tagName)) return;
     if (["pfield", "meal", "item", "rfield", "ring", "rqty"].includes(el.dataset.ch) && el.type !== "checkbox") this._onChange(e);
     if (el.classList.contains("food")) this._suggest(el);
+    if (el.id === "newcat") this._shop.newCat = el.value;
   }
 
   _onChange(e) {
@@ -1383,14 +1403,15 @@ class SharedDietPanel extends HTMLElement {
     const all = this._shopAll();
     const order = this._catOrder();
     const names = Object.fromEntries(this._categories.map((c) => [c.id, c.name]));
-    const catOpts = (sel) => order.map((id) => `<option value="${esc(id)}"${id === sel ? " selected" : ""}>${esc(names[id])}</option>`).join("");
+    const catOpts = (sel) => `<option value="">Automatica</option>` +
+      order.map((id) => `<option value="${esc(id)}"${id === sel ? " selected" : ""}>${esc(names[id])}</option>`).join("");
     // One group per category in this user's order; empty categories are left out.
     const groups = order.map((cid) => {
       const group = (rows ?? []).map((r, i) => [r, i]).filter(([r]) => r.category === cid);
       return group.length ? `<h3>${esc(names[cid])}</h3>${group.map(([r, i]) =>
         `<div class="check shoprow"><label class="check"><input type="checkbox" role="switch" class="switch" data-ch="sitem" data-i="${i}"${
           this._shop.skip.has(r.text) ? "" : " checked"}> ${esc(r.text)}</label>
-          <select data-ch="scat" data-i="${i}" aria-label="Categoria di ${esc(r.food)}">${catOpts(r.category)}</select></div>`).join("")}` : "";
+          <select data-ch="scat" data-i="${i}" aria-label="Categoria di ${esc(r.food)}">${catOpts(this._manualCat(r))}</select></div>`).join("")}` : "";
     }).join("");
     const items = rows === null ? `<p class="muted">Caricamento…</p>`
       : this._shop.failed ? `<p class="msg err">Impossibile calcolare la spesa.</p>`
