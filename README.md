@@ -93,7 +93,7 @@ Per un avviso prima dell'orario, usa il promemoria integrato del profilo (scheda
 
 ### Card per le dashboard
 
-La card è disponibile in **Aggiungi card** (cerca "Dieta") subito dopo installazione o riavvio, senza aggiungere risorse a mano. Si configura in YAML:
+La card è disponibile in **Aggiungi card** (cerca "Dieta") subito dopo installazione o riavvio, senza aggiungere risorse a mano. Si configura dall'editor visuale (vista e profili) oppure in YAML:
 
 ```yaml
 type: custom:shared-diet-card

@@ -20,9 +20,80 @@ p { margin: 4px 0; }
   background: var(--primary-color, #03a9f4); color: var(--text-primary-color, #fff); vertical-align: middle; }
 `;
 
+// Visual editor: the view, and the profiles to show (none ticked = all). Profile names come from the shared subscription.
+class SharedDietCardEditor extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    this.shadowRoot.addEventListener("change", (e) => {
+      const config = { ...this._config };
+      if (e.target.name === "view") config.view = e.target.value;
+      else {
+        const ids = [...this.shadowRoot.querySelectorAll('input[name="profile"]:checked')].map((i) => i.value);
+        if (ids.length) config.profiles = ids;
+        else delete config.profiles;
+      }
+      this._config = config;
+      this.dispatchEvent(new CustomEvent("config-changed", { detail: { config }, bubbles: true, composed: true }));
+    });
+  }
+
+  setConfig(config) {
+    this._config = config;
+    this._render();
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (this.isConnected && !this._unsub) this._subscribe();
+  }
+
+  connectedCallback() {
+    if (this._hass && !this._unsub) this._subscribe();
+  }
+
+  disconnectedCallback() {
+    this._unsub?.();
+    this._unsub = null;
+  }
+
+  _subscribe() {
+    this._unsub = subscribeDiet(this._hass, (msg) => {
+      this._profiles = msg?.profiles ?? null;
+      this._render();
+    });
+  }
+
+  _render() {
+    if (!this._config) return;
+    const view = this._config.view ?? "next";
+    const picked = this._config.profiles ?? [];
+    // Ids in the config whose profile is gone stay listed, so they can be unticked.
+    const all = { ...Object.fromEntries(picked.map((id) => [id, { name: id }])), ...(this._profiles ?? {}) };
+    const profiles = Object.entries(all).map(([id, p]) => `<label class="row">
+      <input type="checkbox" name="profile" value="${esc(id)}"${picked.includes(id) ? " checked" : ""}> ${esc(p.name)}</label>`).join("");
+    this.shadowRoot.innerHTML = `<style>
+      fieldset { border: 0; padding: 0; margin: 0 0 16px; } legend { font-weight: 500; margin-bottom: 4px; }
+      .row { display: flex; align-items: center; gap: 8px; margin: 4px 0; } .muted { color: var(--secondary-text-color, #727272); }
+    </style>
+    <fieldset><legend>Vista</legend>
+      <label class="row"><input type="radio" name="view" value="next"${view === "next" ? " checked" : ""}> Prossimo pasto</label>
+      <label class="row"><input type="radio" name="view" value="today"${view === "today" ? " checked" : ""}> Pasti di oggi</label>
+    </fieldset>
+    <fieldset><legend>Profili</legend>
+      <div class="muted">Nessuno selezionato: tutti i profili.</div>
+      ${this._profiles || picked.length ? profiles : `<div class="muted">Caricamento…</div>`}
+    </fieldset>`;
+  }
+}
+
 class SharedDietCard extends HTMLElement {
   static getStubConfig() {
     return { view: "next" };
+  }
+
+  static getConfigElement() {
+    return document.createElement("shared-diet-card-editor");
   }
 
   constructor() {
@@ -103,6 +174,7 @@ class SharedDietCard extends HTMLElement {
   }
 }
 
+if (!customElements.get("shared-diet-card-editor")) customElements.define("shared-diet-card-editor", SharedDietCardEditor);
 if (!customElements.get("shared-diet-card")) {
   customElements.define("shared-diet-card", SharedDietCard);
   window.customCards = window.customCards || [];
